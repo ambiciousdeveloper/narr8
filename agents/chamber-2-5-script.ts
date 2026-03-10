@@ -84,8 +84,9 @@ export class ScriptScribe {
 
             let retryCount = 0;
             let currentTemp = 0.5;
+            let dialogueRetry = false;
 
-            while (retryCount < 2) {
+            while (retryCount < 3) {
                 const prompt = buildUnifiedPrompt({
                     plot: chunk,
                     characters: charContext,
@@ -101,6 +102,7 @@ export class ScriptScribe {
                     nextSceneNumber: contextState.lastSceneNumber + 1,
                     sopPersona,
                     sopGuidelines,
+                    dialogueRetry,
                     ...contextState
                 });
 
@@ -124,10 +126,11 @@ export class ScriptScribe {
                         continue;
                     }
 
-                    // V141: Dialogue Enforcement - Reject silent scripts and retry
+                    // V141: Dialogue Enforcement - Reject silent scripts and retry with modified prompt
                     if (content && !hasDialogue(content) && retryCount < 2) {
-                        console.warn(`>>> [V141 Dialogue Enforcer] No dialogue detected in chunk ${i + 1}. Retrying with dialogue injection...`);
+                        console.warn(`>>> [V141 Dialogue Enforcer] No dialogue detected in chunk ${i + 1}. Retrying with dialogue injection prompt...`);
                         currentTemp = Math.min(0.9, currentTemp + 0.2);
+                        dialogueRetry = true;
                         retryCount++;
                         continue;
                     }
@@ -207,13 +210,22 @@ function buildUnifiedPrompt(p: any): string {
 
     const personaBlock = p.sopPersona ? `[PERSONA]\n${p.sopPersona}\n` : '';
     const guidelinesBlock = p.sopGuidelines ? `[ADDITIONAL GUIDELINES]\n${p.sopGuidelines}\n` : '';
+    const dialogueAlert = p.dialogueRetry ? `
+🚨 DIALOGUE FAILURE ALERT 🚨
+Your previous response was REJECTED because it contained ZERO dialogue lines.
+You are generating description-only content, which is a CRITICAL ERROR.
+You MUST write character dialogue in EVERY single scene, no exceptions.
+FORMAT: character name alone on one line → dialogue text on the next line.
+DO NOT submit another response without spoken dialogue.
+🚨 END ALERT 🚨
+` : '';
 
     return `
 [[SYSTEM_PROTOCOL]]
 [ROLE]
 Professional Script Adaptor.
 Convert PROSE into a high-density, visual SCREENPLAY in **${langLabel}** ONLY.
-${personaBlock}
+${dialogueAlert}${personaBlock}
 [GOLDEN FORMAT SAMPLE]
 S# 10. INT. 낡은 무도장 - 밤
 먼지 쌓인 매트리스 위로 달빛이 세상을 비춘다.
