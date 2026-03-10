@@ -199,8 +199,8 @@ function scrubMeta(text: string): string {
         .replace(/<STRICT_REASONING_PROTOCOL>[\s\S]*?<\/STRICT_REASONING_PROTOCOL>/gi, "")
         .replace(/Professional.*Screenplay.*/gi, "")
         .replace(/High-density.*no.*\(혼잣말\).*/gi, "")
-        .replace(/\(혼잣말\)/g, "")
-        .replace(/\(침묵\)/g, "")
+        // Remove all parenthetical stage directions from dialogue lines (e.g. (혼잣말), (잠꼬대), (펜을 멈추고))
+        .replace(/\([^)]{1,20}\)\s*/g, "")
         .replace(/^.*대본.*:.*$/gm, "")
         .replace(/```json/gi, "")
         .replace(/```/g, "")
@@ -375,7 +375,10 @@ async function injectDialoguePass(script: string, charContext: string, model: an
     const batchPrompt = `You are writing Korean screenplay dialogue.
 For each numbered scene below, write ONE short Korean spoken line for the named character.
 Output ONLY a JSON array of strings, one per scene, in the same order.
-The lines must be natural spoken Korean (not action descriptions).
+RULES:
+- Natural spoken Korean only — no action descriptions
+- NO parentheticals like (혼잣말) or (잠꼬대) — just the spoken words
+- Keep each line concise (1-2 sentences)
 Example output: ["이게 맞는 길인가...", "거기서 뭐 하는 거야?", "아무 말 하지마."]
 
 [CHARACTER INFO]
