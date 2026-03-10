@@ -6,6 +6,7 @@ import {
     DEFAULT_SCRIPT_DENSITY,
     DEFAULT_SCRIPT_SECTION_LIMIT,
     DEFAULT_SCRIPT_KO_RATIO,
+    DEFAULT_SCRIPT_SCENE_AVG_CHARS,
 } from '../lib/constants';
 
 export class ScriptScribe {
@@ -48,6 +49,8 @@ export class ScriptScribe {
         // system_config 키: SCRIPT_DENSITY, SECTION_LIMIT, SCRIPT_DENSITY_KO_RATIO
         const scriptKoRatio = await fetchConfigMultiplier('SCRIPT_DENSITY_KO_RATIO', DEFAULT_SCRIPT_KO_RATIO);
         const globalDensity = await AgentFactory.fetchConfig('GLOBAL_SCRIPT_DENSITY_MULTIPLIER', 1.0);
+        // 씬(S#) 1개당 평균 글자 수 — system_config: SCRIPT_SCENE_AVG_CHARS
+        const sceneAvgChars = await fetchConfigMultiplier('SCRIPT_SCENE_AVG_CHARS', DEFAULT_SCRIPT_SCENE_AVG_CHARS);
 
         const ratio = language === 'KO' ? Number(scriptKoRatio) : 1.0;
         const totalTargetChars = Math.max(1500, targetLength * Number(scriptDensity) * ratio * Number(globalDensity));
@@ -97,6 +100,7 @@ export class ScriptScribe {
                     chronicle: i === 0 ? chronicle : `[STABLE_BRIDGE]\n${fullScript.slice(-2500)}\n\n[TASK]: Resume from S# ${contextState.lastSceneNumber + 1}.`,
                     language,
                     targetChars: sectionLengthTarget,
+                    sceneAvgChars: Number(sceneAvgChars),
                     sourceProse: slicedRef,
                     idx: i + 1,
                     total: actualSections,
@@ -219,8 +223,9 @@ function buildUnifiedPrompt(p: any): string {
     const personaBlock = p.sopPersona ? `[PERSONA]\n${p.sopPersona}\n` : '';
     const guidelinesBlock = p.sopGuidelines ? `[ADDITIONAL GUIDELINES]\n${p.sopGuidelines}\n` : '';
 
-    // Estimate target scene count from character budget (~200 chars per scene in KO screenplay)
-    const targetScenes = Math.max(3, Math.ceil((p.targetChars || 1500) / 200));
+    // 씬당 평균 글자 수: system_config SCRIPT_SCENE_AVG_CHARS 에서 fetch한 값 사용
+    const avgCharsPerScene = p.sceneAvgChars || 200;
+    const targetScenes = Math.max(3, Math.ceil((p.targetChars || 1500) / avgCharsPerScene));
 
     const dialogueAlert = p.dialogueRetry ? `
 🚨 DIALOGUE FAILURE ALERT 🚨

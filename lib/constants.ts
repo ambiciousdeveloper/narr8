@@ -58,6 +58,9 @@ export const DEFAULT_SCRIPT_SECTION_LIMIT = 1500;
 /** 한국어 스크립트의 밀도 비율 (system_config: SCRIPT_DENSITY_KO_RATIO) */
 export const DEFAULT_SCRIPT_KO_RATIO = 0.50;
 
+/** 한국어 대본 씬(S#) 1개당 평균 글자 수 (system_config: SCRIPT_SCENE_AVG_CHARS) */
+export const DEFAULT_SCRIPT_SCENE_AVG_CHARS = 200;
+
 // ─── 보이스 설정 기본값 ────────────────────────────────────────────────────────
 
 /** 캐릭터 보이스 초기화 시 사용되는 기본 설정 */
