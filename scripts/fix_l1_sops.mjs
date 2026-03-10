@@ -51,8 +51,8 @@ const L1_ORIGINAL_SOP_V12 = `
 
 [Authoritative Analysis & Naming Protocol]
 - Rank characters by importance using **tier**: MAIN (Protagonist), SUPPORT (Supporting), EXTRA (Background).
-- **[RULE]**: If a character is MAIN or SUPPORT, they MUST have a **Proper Name** (e.g., "이현우", "Namgung Hyeon").
-- **Naming Strategy**: If the source text only refers to an important character by their role (e.g., "The Professor", "The Librarian"), you MUST **invent a fitting proper name** for them based on the setting (e.g., "사서 정수연").
+- **[RULE]**: If a character is MAIN or SUPPORT, they MUST have a **Proper Name** (e.g., "[설정에 맞는 고유명]", "[A Name Fitting the World]").
+- **Naming Strategy**: If the source text only refers to an important character by their role (e.g., "The Professor", "The Librarian"), you MUST **invent a fitting proper name** for them based on the setting (e.g., "[역할+설정에 어울리는 고유명]").
 - **Generic Roles**: Characters who remain unnamed or are referred to as "Student 1", "Guard", "Janitor" MUST be assigned the **EXTRA** tier.
 - Define their **role**: Explicitly state their narrative function. Do NOT leave as "Unknown".
 
