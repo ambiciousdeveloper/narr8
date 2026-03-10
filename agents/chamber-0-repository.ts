@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { createClient } from '@supabase/supabase-js';
+import { GEMINI_MODEL } from '../lib/constants';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
@@ -55,9 +56,8 @@ export class AgentFactory {
     }
 
     public static getModel(isPro: boolean = false) {
-        // 최신 차세대 엔진 Gemini 2.0 Flash로 전면 교체
         return genAI.getGenerativeModel({
-            model: "gemini-2.0-flash"
+            model: GEMINI_MODEL
         });
     }
 

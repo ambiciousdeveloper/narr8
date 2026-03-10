@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { AgentFactory } from './chamber-0-repository';
+import { GEMINI_MODEL } from '../lib/constants';
 
 interface CriticismResult {
     score: number;
@@ -24,7 +25,7 @@ export const StoryCritic = {
         }
     ): Promise<CriticismResult> {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
         const sop = await AgentFactory.fetchSOP('CRITIC_GUIDELINES');
 

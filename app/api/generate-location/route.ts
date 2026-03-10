@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { REPLICATE_MODEL_FLUX_SCHNELL, DEFAULT_LOCATION_VISUAL_STYLE, DEFAULT_PROJECT_WORLD } from '@/lib/constants';
 import { createClient } from '@supabase/supabase-js';
 
 export async function POST(req: NextRequest) {
@@ -48,22 +49,22 @@ export async function POST(req: NextRequest) {
 
         // [V29 Refinement] Explicitly use all requested fields
         const artStyleKr = projectConfig?.art_style_kr || "";
-        const artStyleEn = projectConfig?.art_style_en || "photorealistic, high detail";
+        const artStyleEn = projectConfig?.art_style_en || DEFAULT_LOCATION_VISUAL_STYLE.artStyleEn;
         const aestheticDnaKr = projectConfig?.aesthetic_dna_kr || "";
-        const aestheticDnaEn = projectConfig?.aesthetic_dna_en || "cinematic lighting, 8k";
+        const aestheticDnaEn = projectConfig?.aesthetic_dna_en || DEFAULT_LOCATION_VISUAL_STYLE.aestheticDnaEn;
         const cinematographyKr = projectConfig?.cinematography_kr || "";
-        const cinematographyEn = projectConfig?.cinematography_en || "wide angle, sharp focus";
+        const cinematographyEn = projectConfig?.cinematography_en || DEFAULT_LOCATION_VISUAL_STYLE.cinematographyEn;
 
         const genreKr = projectConfig?.genre_kr || "";
-        const genreEn = projectConfig?.genre_en || "Cinematic";
+        const genreEn = projectConfig?.genre_en || DEFAULT_LOCATION_VISUAL_STYLE.genreEn;
         const storyToneKr = projectConfig?.story_tone_kr || "";
-        const storyToneEn = projectConfig?.story_tone_en || "Neutral";
+        const storyToneEn = projectConfig?.story_tone_en || DEFAULT_LOCATION_VISUAL_STYLE.storyToneEn;
         const worldCountryKr = projectConfig?.world_country_kr || "";
-        const worldCountryEn = projectConfig?.world_country_en || "South Korea";
+        const worldCountryEn = projectConfig?.world_country_en || DEFAULT_PROJECT_WORLD.worldCountryEn;
         const worldCityKr = projectConfig?.world_city_kr || "";
-        const worldCityEn = projectConfig?.world_city_en || "Seoul";
+        const worldCityEn = projectConfig?.world_city_en || DEFAULT_PROJECT_WORLD.worldCityEn;
         const culturalSettingKr = projectConfig?.cultural_setting_kr || "";
-        const culturalSettingEn = projectConfig?.cultural_setting_en || "Modern Korean";
+        const culturalSettingEn = projectConfig?.cultural_setting_en || DEFAULT_PROJECT_WORLD.culturalSettingEn;
 
         const artStyleFinal = episodeOverlay.art_style || artStyleEn;
         const aestheticDnaFinal = episodeOverlay.aesthetic_dna || aestheticDnaEn;
@@ -119,7 +120,7 @@ export async function POST(req: NextRequest) {
         console.log(`>>> [Location Gen] Generating ${locData.name_kr} using Flux...`);
 
         // 3. Call Replicate (Flux Schnell for landscapes)
-        const response = await fetch("https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions", {
+        const response = await fetch(`https://api.replicate.com/v1/models/${REPLICATE_MODEL_FLUX_SCHNELL}/predictions`, {
             method: "POST",
             headers: {
                 "Authorization": `Token ${replicateKey}`,

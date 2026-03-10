@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { REPLICATE_MODEL_FLUX_SCHNELL } from '@/lib/constants';
 import { createClient } from '@supabase/supabase-js';
 
 export async function POST(req: NextRequest) {
@@ -67,7 +68,7 @@ export async function POST(req: NextRequest) {
         console.log(`>>> [Shot Synthesis] Rendering shot_${shotId} for Ep ${episodeId}...`);
 
         // 4. Call Replicate (Flux Pro or Schnell)
-        const response = await fetch("https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions", {
+        const response = await fetch(`https://api.replicate.com/v1/models/${REPLICATE_MODEL_FLUX_SCHNELL}/predictions`, {
             method: "POST",
             headers: {
                 "Authorization": `Token ${replicateKey}`,

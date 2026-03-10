@@ -1,6 +1,7 @@
 ﻿import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { AgentResponse } from './chamber-0-repository';
 import { AgentFactory } from './chamber-0-repository';
+import { GEMINI_MODEL } from '../lib/constants';
 
 export class StoryArchitect {
 
@@ -10,7 +11,7 @@ export class StoryArchitect {
   public static async analyze(level: string, context: string, isAdapted: boolean = false, extraContext?: any): Promise<AgentResponse> {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash",
+      model: GEMINI_MODEL,
       generationConfig: {
         maxOutputTokens: 40000,
         responseMimeType: "application/json",

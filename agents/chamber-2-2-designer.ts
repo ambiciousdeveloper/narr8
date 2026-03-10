@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AgentFactory, type AgentResponse } from './chamber-0-repository';
+import { GEMINI_MODEL } from '../lib/constants';
 
 /**
  * Designer Agent Input Interface
@@ -31,7 +32,7 @@ export interface DesignerInput {
 export async function analyzeSingleEpisode(input: DesignerInput): Promise<AgentResponse> {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash", // [Confirmed] Using Flash 2.0
+    model: GEMINI_MODEL, // [Confirmed] Using Flash 2.0
     generationConfig: {
       responseMimeType: "application/json",
       temperature: 0.2

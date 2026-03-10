@@ -1,5 +1,11 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AgentFactory, type AgentResponse } from './chamber-0-repository';
+import {
+    GEMINI_MODEL,
+    DEFAULT_SCRIPT_DENSITY,
+    DEFAULT_SCRIPT_SECTION_LIMIT,
+    DEFAULT_SCRIPT_KO_RATIO,
+} from '../lib/constants';
 
 export class ScriptScribe {
     /**
@@ -20,7 +26,7 @@ export class ScriptScribe {
         refText: string = ""
     ): Promise<AgentResponse> {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
         const creativity = Math.min(0.9, 0.7 + (level * 0.05));
 
         // 1. Unified Configuration Fetching
@@ -35,9 +41,10 @@ export class ScriptScribe {
             return await AgentFactory.fetchConfig(key, val);
         };
 
-        const scriptDensity = await fetchConfigMultiplier('SCRIPT_DENSITY', 800);
-        const sectionLimit = await fetchConfigMultiplier('SECTION_LIMIT', 1500);
-        const scriptKoRatio = await fetchConfigMultiplier('SCRIPT_KO_RATIO', 0.50);
+        // 우선순위: system_config → VOLUME_CONTROL_POLICY SOP → lib/constants 기본값
+        const scriptDensity = await fetchConfigMultiplier('SCRIPT_DENSITY', DEFAULT_SCRIPT_DENSITY);
+        const sectionLimit = await fetchConfigMultiplier('SECTION_LIMIT', DEFAULT_SCRIPT_SECTION_LIMIT);
+        const scriptKoRatio = await fetchConfigMultiplier('SCRIPT_KO_RATIO', DEFAULT_SCRIPT_KO_RATIO);
         const globalDensity = await AgentFactory.fetchConfig('GLOBAL_SCRIPT_DENSITY_MULTIPLIER', 1.0);
 
         const ratio = language === 'KO' ? Number(scriptKoRatio) : 1.0;

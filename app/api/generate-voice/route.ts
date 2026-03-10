@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import {
+    ELEVENLABS_MODEL,
+    INITIAL_VOICE_SETTINGS,
+    AGE_VOICE_SETTINGS,
+    FALLBACK_VOICE_POOLS,
+    VOICE_KEYWORD_SCORE_MAP,
+} from '@/lib/constants';
 
 export async function POST(req: NextRequest) {
     try {
@@ -44,12 +51,7 @@ export async function POST(req: NextRequest) {
                 character_id: characterId,
                 project_id: charData.project_id,
                 voice_persona_name: charData.reinterpreted_name_kr + " Tone",
-                voice_settings: {
-                    stability: 0.5,
-                    similarity_boost: 0.75,
-                    style: 0.0,
-                    use_speaker_boost: true
-                }
+                voice_settings: INITIAL_VOICE_SETTINGS
             };
             const { data: newVal, error: initErr } = await supabase
                 .from('character_voices')
@@ -86,16 +88,6 @@ export async function POST(req: NextRequest) {
             countryKr
         ].join(' ').toLowerCase();
 
-        const KEYWORD_SCORE_MAP: Record<string, string[]> = {
-            strong: ['strong', 'powerful', 'commanding', 'authority', 'forceful', '강한', '강력', '권위', '카리스마'],
-            soft: ['soft', 'gentle', 'calm', 'warm', 'kind', 'tender', '부드러운', '따뜻한', '온화한', '친절'],
-            raspy: ['raspy', 'gravelly', 'rough', 'husky', 'gritty', '허스키', '거친', '굵은'],
-            authoritative: ['boss', 'executive', 'leader', 'ceo', 'chief', 'president', 'magistrate', '대표', '대통령', '사장', '리더', '지도자'],
-            villainous: ['villain', 'manipulate', 'scheming', 'cold', 'ruthless', 'sinister', '악당', '조종', '냉혹', '잔인'],
-            friendly: ['friendly', 'cheerful', 'bright', 'outgoing', 'social', '쾌활', '명랑', '사교적', '친근한'],
-            mysterious: ['mysterious', 'enigmatic', 'secretive', 'quiet', 'introverted', '신비', '내성적', '조용한'],
-            narrator: ['narrator', 'narration', 'storytelling', '내레이터', '서술'],
-        };
 
         // Determine age group label
         const ageGroup = numericAge >= 60 ? 'old'
@@ -152,7 +144,7 @@ export async function POST(req: NextRequest) {
                 }
 
                 // Personality/role keyword match (up to 60 points)
-                for (const [trait, keywords] of Object.entries(KEYWORD_SCORE_MAP)) {
+                for (const [trait, keywords] of Object.entries(VOICE_KEYWORD_SCORE_MAP)) {
                     const charHasTrait = keywords.some(k => charProfile.includes(k));
                     const voiceHasTrait = keywords.some(k => voiceDesc.includes(k));
                     if (charHasTrait && voiceHasTrait) score += 20;
@@ -186,37 +178,7 @@ export async function POST(req: NextRequest) {
             // Fallback to safe defaults if API call fails
             console.error(`>>> [Voice Gen] ElevenLabs API unreachable or error: ${voiceErr.message}. USING FALLBACK POOL.`);
 
-            // Pool of high-quality default voices for variety even during API failure
-            const FALLBACK_POOLS: Record<string, [string, string][]> = {
-                'male-old': [
-                    ['VR6AewLTigWG4xSOukaG', 'Arnold (Fallback)'],
-                    ['N2lVS1wzEx9vC9n2BkoX', 'Josh (Old-Fallback)'], // Josh can sound mature
-                    ['ErXwobaYiN019PkySvjV', 'Antoni (Old-Fallback)']
-                ],
-                'male-middle aged': [
-                    ['TxGEqnHWrfWFTfGW9XjX', 'Josh (Fallback)'],
-                    ['ErXwobaYiN019PkySvjV', 'Antoni (Mature-Fallback)'],
-                    ['VR6AewLTigWG4xSOukaG', 'Arnold (Mature-Fallback)']
-                ],
-                'male-young': [
-                    ['ErXwobaYiN019PkySvjV', 'Antoni (Fallback)'],
-                    ['TxGEqnHWrfWFTfGW9XjX', 'Josh (Young-Fallback)']
-                ],
-                'female-old': [
-                    ['z9fAnlkpzviPz146aGWa', 'Glinda (Fallback)'],
-                    ['21m00Tcm4TlvDq8ikWAM', 'Rachel (Old-Fallback)']
-                ],
-                'female-middle aged': [
-                    ['z9fAnlkpzviPz146aGWa', 'Glinda (Fallback)'],
-                    ['EXAVITQu4vr4xnSDxMaL', 'Bella (Fallback)']
-                ],
-                'female-young': [
-                    ['21m00Tcm4TlvDq8ikWAM', 'Rachel (Fallback)'],
-                    ['EXAVITQu4vr4xnSDxMaL', 'Bella (Young-Fallback)']
-                ],
-            };
-
-            const pool = FALLBACK_POOLS[`${genderLabel}-${ageGroup}`] || [['21m00Tcm4TlvDq8ikWAM', 'Rachel (Fallback)']];
+            const pool = FALLBACK_VOICE_POOLS[`${genderLabel}-${ageGroup}`] || [['21m00Tcm4TlvDq8ikWAM', 'Rachel (Fallback)']];
             // Pick a random one from the pool for variety
             const [fId, fName] = pool[Math.floor(Math.random() * pool.length)];
 
@@ -235,13 +197,7 @@ export async function POST(req: NextRequest) {
         console.log(`>>> [Voice Gen] previewText selected: "${previewText}"`);
         console.log(`>>> [Voice Gen] Casting ${charData.reinterpreted_name_kr} as ${selectedVoiceName} (${selectedVoiceId})`);
 
-        // 4. Age-tier specific voice settings (V12.6 Fix — uses ageGroup from V12.7)
-        const AGE_VOICE_SETTINGS = {
-            OLD: { stability: 0.75, similarity_boost: 0.65, style: 0.08 }, // 중후하고 안정적, 허스키한 노인톤
-            MATURE: { stability: 0.60, similarity_boost: 0.70, style: 0.18 }, // 중간 무게감, 절제된 개성
-            YOUNG: { stability: 0.35, similarity_boost: 0.80, style: 0.30 }, // 역동적이고 맑은 청년톤
-        };
-
+        // 4. Age-tier specific voice settings (lib/constants.ts 의 AGE_VOICE_SETTINGS 참조)
         const ageTier = ageGroup === 'old' ? 'OLD' : ageGroup === 'middle aged' ? 'MATURE' : 'YOUNG';
         const voiceSettings = AGE_VOICE_SETTINGS[ageTier];
         console.log(`>>> [Voice Gen] Age tier: ${ageTier} | settings: ${JSON.stringify(voiceSettings)}`);
@@ -254,7 +210,7 @@ export async function POST(req: NextRequest) {
             },
             body: JSON.stringify({
                 text: previewText,
-                model_id: "eleven_multilingual_v2",
+                model_id: ELEVENLABS_MODEL,
                 voice_settings: voiceSettings,
             }),
         });

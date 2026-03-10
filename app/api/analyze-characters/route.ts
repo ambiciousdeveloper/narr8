@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GEMINI_MODEL } from '@/lib/constants';
 
 export async function POST(req: NextRequest) {
     try {
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
                 .replace(/\s*[\(\[].*?[\)\]]$/, "") // Strip trailing (suffix) or [suffix]
                 .trim();
         };
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
         // 1. Context Collection
         const { data: projectConfig } = await supabase.from('project_master_config').select('*').eq('project_id', projectId).single();

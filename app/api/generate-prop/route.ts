@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Replicate from 'replicate';
+import { REPLICATE_MODEL_FLUX_SCHNELL, DEFAULT_VISUAL_STYLE, DEFAULT_PROJECT_WORLD } from '@/lib/constants';
 import { createClient } from '@supabase/supabase-js';
 
 const replicate = new Replicate({
@@ -47,15 +48,15 @@ export async function POST(req: NextRequest) {
 
         // [V29 Refinement] Explicitly use all requested fields
         const artStyleKr = projectConfig?.art_style_kr || "";
-        const artStyleEn = projectConfig?.art_style_en || "photorealistic, high detail";
+        const artStyleEn = projectConfig?.art_style_en || DEFAULT_VISUAL_STYLE.artStyleEn;
         const aestheticDnaKr = projectConfig?.aesthetic_dna_kr || "";
-        const aestheticDnaEn = projectConfig?.aesthetic_dna_en || "cinematic lighting, 8k";
+        const aestheticDnaEn = projectConfig?.aesthetic_dna_en || DEFAULT_VISUAL_STYLE.aestheticDnaEn;
         const culturalSettingKr = projectConfig?.cultural_setting_kr || "";
-        const culturalSettingEn = projectConfig?.cultural_setting_en || "Modern Korean";
+        const culturalSettingEn = projectConfig?.cultural_setting_en || DEFAULT_PROJECT_WORLD.culturalSettingEn;
         const worldCountryKr = projectConfig?.world_country_kr || "";
-        const worldCountryEn = projectConfig?.world_country_en || "South Korea";
+        const worldCountryEn = projectConfig?.world_country_en || DEFAULT_PROJECT_WORLD.worldCountryEn;
         const storyToneKr = projectConfig?.story_tone_kr || "";
-        const storyToneEn = projectConfig?.story_tone_en || "Neutral";
+        const storyToneEn = projectConfig?.story_tone_en || DEFAULT_VISUAL_STYLE.storyToneEn;
 
         const currentArtStyle = episodeOverlay.art_style || artStyleEn;
         const currentAestheticDna = episodeOverlay.aesthetic_dna || aestheticDnaEn;
@@ -133,7 +134,7 @@ export async function POST(req: NextRequest) {
         // 5. Trigger Generation
         console.log(`>>> Generating Prop Visual: ${prop.name_kr}`);
         const output = await replicate.run(
-            "black-forest-labs/flux-schnell",
+            REPLICATE_MODEL_FLUX_SCHNELL,
             { input: { prompt, aspect_ratio: "1:1" } }
         );
 

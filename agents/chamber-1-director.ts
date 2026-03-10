@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import type { AgentResponse } from './chamber-0-repository';
+import { GEMINI_MODEL } from '../lib/constants';
 
 export class GrandDirector {
 
@@ -24,7 +25,7 @@ export class GrandDirector {
 
     // 2. Initialize Gemini Model (Direct instantiation for reliability)
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
     // 3. Construct System Instruction & Prompt
     const systemInstruction = `
@@ -191,7 +192,7 @@ export class GrandDirector {
   public static async fillExtraNames(characters: any[], worldContext: any): Promise<any[]> {
     try {
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+      const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
       const context = `
                  [WORLD CONTEXT]
@@ -240,7 +241,7 @@ export class GrandDirector {
    */
   public static async expandBeats(synopsis: string, worldSettings: string, charContext: string): Promise<string[]> {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
     const prompt = `
         Role: Master Narrative Architect
@@ -284,7 +285,7 @@ export class GrandDirector {
    */
   public static async extractBeatsFromProse(prose: string, charContext: string): Promise<string[]> {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
     const prompt = `
         Role: Narrative Analyst

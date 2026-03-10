@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GEMINI_MODEL } from '@/lib/constants';
 
 const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -82,7 +83,7 @@ export async function POST(req: NextRequest) {
         const existingClips = existingStoryboard?.timeline_data?.tracks[0]?.clips || [];
 
         // 4. Analyze Script via Gemini
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
         const prompt = `
             Analyze the following screenplay and break it down into a sequence of "Shots" for video production.
             

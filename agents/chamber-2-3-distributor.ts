@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AgentFactory } from './chamber-0-repository';
+import { GEMINI_MODEL } from '../lib/constants';
 
 export interface StoryEvent {
     id: number;
@@ -21,7 +22,7 @@ export class StoryDistributor {
 
     constructor() {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-        this.model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        this.model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
     }
 
     async distribute(l2Synopsis: string, sceneCount?: number): Promise<StoryBeat[]> {

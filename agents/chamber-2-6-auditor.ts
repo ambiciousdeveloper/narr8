@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AgentFactory } from './chamber-0-repository';
 import type { AgentResponse } from './chamber-0-repository';
+import { GEMINI_MODEL } from '../lib/constants';
 
 /**
  * Chamber 2-6: Narrative Auditor
@@ -16,7 +17,7 @@ export class NarrativeAuditor {
     ): Promise<AgentResponse> {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
         const model = genAI.getGenerativeModel({
-            model: "gemini-2.0-flash",
+            model: GEMINI_MODEL,
             generationConfig: {
                 responseMimeType: "application/json",
                 temperature: 0.1 // High objectivity required

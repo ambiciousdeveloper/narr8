@@ -1,5 +1,12 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AgentFactory, type AgentResponse } from './chamber-0-repository';
+import {
+    GEMINI_MODEL,
+    DEFAULT_NOVEL_DENSITY,
+    DEFAULT_SECTION_LIMIT_KO,
+    DEFAULT_SECTION_LIMIT_EN,
+    DEFAULT_NOVEL_KO_RATIO,
+} from '../lib/constants';
 
 
 export class NovelScribe {
@@ -21,8 +28,7 @@ export class NovelScribe {
         refText: string = ""
     ): Promise<AgentResponse> {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-        // [V7.1 Stabilized] Reverted to gemini-2.0-flash for reliability, but kept expansion prompts
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
         const creativity = Math.min(0.9, 0.70 + (level * 0.05));
 
         // 1. Fetch Configuration & SOPs from DB
@@ -36,18 +42,17 @@ export class NovelScribe {
             AgentFactory.fetchSOP(mode === 'CREATE' ? 'SCRIBE_PERSONA_NOVEL' : (mode === 'TRANSLATE' ? 'SCRIBE_MISSION_TRANSLATE' : 'SCRIBE_MISSION_ADAPT'))
         ]);
 
-        // [V7.8 Zero-Hardcoding] Extract values from VOLUME_CONTROL_POLICY SOP (Fallback)
-        // [V24.0 Priority] Check system_config table FIRST
-        const novelDensitySop = AgentFactory.parseVolumeConfig(volumeSop, 'NOVEL_DENSITY', 1200);
+        // 우선순위: system_config → VOLUME_CONTROL_POLICY SOP → lib/constants 기본값
+        const novelDensitySop = AgentFactory.parseVolumeConfig(volumeSop, 'NOVEL_DENSITY', DEFAULT_NOVEL_DENSITY);
         const novelDensity = await AgentFactory.fetchConfig('NOVEL_DENSITY', novelDensitySop);
 
-        const sectionLimitKoSop = AgentFactory.parseVolumeConfig(volumeSop, 'SECTION_LIMIT_KO', 700);
+        const sectionLimitKoSop = AgentFactory.parseVolumeConfig(volumeSop, 'SECTION_LIMIT_KO', DEFAULT_SECTION_LIMIT_KO);
         const sectionLimitKo = await AgentFactory.fetchConfig('SECTION_LIMIT_KO', sectionLimitKoSop);
 
-        const sectionLimitEnSop = AgentFactory.parseVolumeConfig(volumeSop, 'SECTION_LIMIT_EN', 3000);
+        const sectionLimitEnSop = AgentFactory.parseVolumeConfig(volumeSop, 'SECTION_LIMIT_EN', DEFAULT_SECTION_LIMIT_EN);
         const sectionLimitEn = await AgentFactory.fetchConfig('SECTION_LIMIT_EN', sectionLimitEnSop);
 
-        const novelKoRatioSop = AgentFactory.parseVolumeConfig(volumeSop, 'NOVEL_KO_RATIO', 0.42);
+        const novelKoRatioSop = AgentFactory.parseVolumeConfig(volumeSop, 'NOVEL_KO_RATIO', DEFAULT_NOVEL_KO_RATIO);
         const novelKoRatio = await AgentFactory.fetchConfig('NOVEL_KO_RATIO', novelKoRatioSop);
 
         // [V3.1 Forced Turbo]
