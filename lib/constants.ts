@@ -23,31 +23,39 @@ export const REPLICATE_MODEL_FLUX_SCHNELL = "black-forest-labs/flux-schnell";
 
 // ─── 소설 볼륨 설정 폴백 기본값 ────────────────────────────────────────────────
 // 실제 적용 우선순위: system_config 테이블 → VOLUME_CONTROL_POLICY SOP → 아래 상수
-// system_config 테이블에 동일한 키(NOVEL_DENSITY 등)가 있으면 해당 값이 우선 사용됩니다.
+//
+// system_config 테이블 실제 키 이름:
+//   NOVEL_DENSITY             → 소설 섹션당 기준 글자 수
+//   SECTION_LIMIT             → 1회 패스당 최대 글자 수 (영문 기준)
+//   NOVEL_DENSITY_KO_RATIO    → 한국어 소설 분량 비율 (영문 대비)
 
-/** 소설 섹션당 기준 글자 수 (한국어 기준) */
+/** 소설 섹션당 기준 글자 수 (system_config: NOVEL_DENSITY) */
 export const DEFAULT_NOVEL_DENSITY = 1200;
 
-/** 소설 생성 1회 패스당 최대 한국어 글자 수 */
+/** 소설 생성 1회 패스당 최대 한국어 글자 수 (system_config 별도 키 없음 → 이 값 사용) */
 export const DEFAULT_SECTION_LIMIT_KO = 700;
 
-/** 소설 생성 1회 패스당 최대 영어 글자 수 */
+/** 소설 생성 1회 패스당 최대 영어 글자 수 (system_config: SECTION_LIMIT) */
 export const DEFAULT_SECTION_LIMIT_EN = 3000;
 
-/** 한국어 소설의 밀도 비율 (영어 대비) */
+/** 한국어 소설의 밀도 비율 (system_config: NOVEL_DENSITY_KO_RATIO) */
 export const DEFAULT_NOVEL_KO_RATIO = 0.42;
 
 // ─── 스크립트 볼륨 설정 폴백 기본값 ───────────────────────────────────────────
 // 실제 적용 우선순위: system_config 테이블 → VOLUME_CONTROL_POLICY SOP → 아래 상수
-// system_config 테이블에 동일한 키(SCRIPT_DENSITY 등)가 있으면 해당 값이 우선 사용됩니다.
+//
+// system_config 테이블 실제 키 이름:
+//   SCRIPT_DENSITY            → 스크립트 섹션당 기준 글자 수
+//   SECTION_LIMIT             → 1회 패스당 최대 글자 수
+//   SCRIPT_DENSITY_KO_RATIO   → 한국어 스크립트 분량 비율 (영문 대비)
 
-/** 스크립트 섹션당 기준 글자 수 */
+/** 스크립트 섹션당 기준 글자 수 (system_config: SCRIPT_DENSITY) */
 export const DEFAULT_SCRIPT_DENSITY = 800;
 
-/** 스크립트 생성 1회 패스당 최대 글자 수 */
+/** 스크립트 생성 1회 패스당 최대 글자 수 (system_config: SECTION_LIMIT) */
 export const DEFAULT_SCRIPT_SECTION_LIMIT = 1500;
 
-/** 한국어 스크립트의 밀도 비율 */
+/** 한국어 스크립트의 밀도 비율 (system_config: SCRIPT_DENSITY_KO_RATIO) */
 export const DEFAULT_SCRIPT_KO_RATIO = 0.50;
 
 // ─── 보이스 설정 기본값 ────────────────────────────────────────────────────────

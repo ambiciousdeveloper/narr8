@@ -44,7 +44,8 @@ export class ScriptScribe {
         // 우선순위: system_config → VOLUME_CONTROL_POLICY SOP → lib/constants 기본값
         const scriptDensity = await fetchConfigMultiplier('SCRIPT_DENSITY', DEFAULT_SCRIPT_DENSITY);
         const sectionLimit = await fetchConfigMultiplier('SECTION_LIMIT', DEFAULT_SCRIPT_SECTION_LIMIT);
-        const scriptKoRatio = await fetchConfigMultiplier('SCRIPT_KO_RATIO', DEFAULT_SCRIPT_KO_RATIO);
+        // system_config 키: SCRIPT_DENSITY, SECTION_LIMIT, SCRIPT_DENSITY_KO_RATIO
+        const scriptKoRatio = await fetchConfigMultiplier('SCRIPT_DENSITY_KO_RATIO', DEFAULT_SCRIPT_KO_RATIO);
         const globalDensity = await AgentFactory.fetchConfig('GLOBAL_SCRIPT_DENSITY_MULTIPLIER', 1.0);
 
         const ratio = language === 'KO' ? Number(scriptKoRatio) : 1.0;

@@ -43,17 +43,20 @@ export class NovelScribe {
         ]);
 
         // 우선순위: system_config → VOLUME_CONTROL_POLICY SOP → lib/constants 기본값
+        // system_config 키: NOVEL_DENSITY, SECTION_LIMIT, NOVEL_DENSITY_KO_RATIO
         const novelDensitySop = AgentFactory.parseVolumeConfig(volumeSop, 'NOVEL_DENSITY', DEFAULT_NOVEL_DENSITY);
         const novelDensity = await AgentFactory.fetchConfig('NOVEL_DENSITY', novelDensitySop);
 
         const sectionLimitKoSop = AgentFactory.parseVolumeConfig(volumeSop, 'SECTION_LIMIT_KO', DEFAULT_SECTION_LIMIT_KO);
         const sectionLimitKo = await AgentFactory.fetchConfig('SECTION_LIMIT_KO', sectionLimitKoSop);
 
+        // system_config의 SECTION_LIMIT 키 사용 (영문 기준)
         const sectionLimitEnSop = AgentFactory.parseVolumeConfig(volumeSop, 'SECTION_LIMIT_EN', DEFAULT_SECTION_LIMIT_EN);
-        const sectionLimitEn = await AgentFactory.fetchConfig('SECTION_LIMIT_EN', sectionLimitEnSop);
+        const sectionLimitEn = await AgentFactory.fetchConfig('SECTION_LIMIT', sectionLimitEnSop);
 
-        const novelKoRatioSop = AgentFactory.parseVolumeConfig(volumeSop, 'NOVEL_KO_RATIO', DEFAULT_NOVEL_KO_RATIO);
-        const novelKoRatio = await AgentFactory.fetchConfig('NOVEL_KO_RATIO', novelKoRatioSop);
+        // system_config 키: NOVEL_DENSITY_KO_RATIO
+        const novelKoRatioSop = AgentFactory.parseVolumeConfig(volumeSop, 'NOVEL_DENSITY_KO_RATIO', DEFAULT_NOVEL_KO_RATIO);
+        const novelKoRatio = await AgentFactory.fetchConfig('NOVEL_DENSITY_KO_RATIO', novelKoRatioSop);
 
         // [V3.1 Forced Turbo]
         const blueprintText = originalPlot;

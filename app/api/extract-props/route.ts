@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
             당신은 영화 제작의 소품 감독(Prop Master)입니다. 다음 데이터를 분석하여 스토리상 중요한 '핵심 소품(Key Prop)' 리스트를 추출하세요.
 
             [지역적 배경]
-            도시: ${project?.world_city_kr || 'Seoul'}
+            도시: ${project?.world_city_kr || '설정 미입력'}
 
             [데이터 원천]
             1. **캐릭터 인벤토리**: [${uniqueInventoryItems.join(', ')}]
