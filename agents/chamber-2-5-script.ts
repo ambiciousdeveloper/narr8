@@ -218,6 +218,10 @@ function buildUnifiedPrompt(p: any): string {
 
     const personaBlock = p.sopPersona ? `[PERSONA]\n${p.sopPersona}\n` : '';
     const guidelinesBlock = p.sopGuidelines ? `[ADDITIONAL GUIDELINES]\n${p.sopGuidelines}\n` : '';
+
+    // Estimate target scene count from character budget (~200 chars per scene in KO screenplay)
+    const targetScenes = Math.max(3, Math.ceil((p.targetChars || 1500) / 200));
+
     const dialogueAlert = p.dialogueRetry ? `
 🚨 DIALOGUE FAILURE ALERT 🚨
 Your previous response was REJECTED because it contained ZERO dialogue lines.
@@ -247,6 +251,10 @@ S# 10. INT. 낡은 무도장 - 밤
 강태준
 ...결국, 다시 시작인 건가.
 경직된 턱 근육이 대변하듯 그는 룬 문자를 뚫어져라 응시한다.
+
+[TARGET VOLUME]
+This section must contain approximately **${targetScenes} scenes** (≈ ${p.targetChars} characters).
+Distribute the story beats evenly across scenes. Do NOT stop early — fill the full target length.
 
 [MANDATORY RULES]
 1. **SCENE NUMBERING**: You MUST start the content with "S# ${nextNum}.". Use format "S# N. [PLACE] - [TIME]".
