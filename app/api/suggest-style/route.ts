@@ -67,9 +67,15 @@ export async function POST(req: NextRequest) {
         const codeBlockMatch = text.match(/```(?:json)?([\s\S]*?)```/);
         if (codeBlockMatch) {
             jsonString = codeBlockMatch[1];
+        } else {
+            // Fallback: extract raw JSON object if no code block present
+            const objectMatch = text.match(/\{[\s\S]*\}/);
+            if (objectMatch) {
+                jsonString = objectMatch[0];
+            }
         }
 
-        const data = JSON.parse(jsonString);
+        const data = JSON.parse(jsonString.trim());
         return NextResponse.json(data);
 
     } catch (error: any) {

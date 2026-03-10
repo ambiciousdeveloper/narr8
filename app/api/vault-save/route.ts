@@ -24,8 +24,23 @@ export async function POST(req: NextRequest) {
             const episodeId = metadata?.episode_id;
             const language = metadata?.language;
 
-            // Convert raw text to Data URI for storage_url so it's downloadable/viewable
-            const dataUri = `data:text/plain;charset=utf-8,${encodeURIComponent(content)}`;
+            // Upload text content to Supabase Storage to avoid data URI size limits
+            // Bucket 'vault-text' must exist in your Supabase project (create via Dashboard > Storage)
+            const filePath = `${projectId}/${category || 'text'}_${episodeId || 'na'}_${language || 'kr'}_${Date.now()}.txt`;
+            const fileBuffer = Buffer.from(content, 'utf-8');
+
+            const { error: uploadErr } = await supabase.storage
+                .from('vault-text')
+                .upload(filePath, fileBuffer, {
+                    contentType: 'text/plain; charset=utf-8',
+                    upsert: true
+                });
+
+            if (uploadErr) throw uploadErr;
+
+            const { data: { publicUrl: storageUrl } } = supabase.storage
+                .from('vault-text')
+                .getPublicUrl(filePath);
 
             // Check if existing record exists
             const { data: existing } = await supabase
@@ -41,7 +56,7 @@ export async function POST(req: NextRequest) {
                 const { error: upErr } = await supabase
                     .from('permanent_vault')
                     .update({
-                        storage_url: dataUri,
+                        storage_url: storageUrl,
                         asset_name: assetName,
                         metadata: { ...metadata, updated_at: new Date().toISOString() },
                         created_at: new Date().toISOString()
@@ -52,12 +67,12 @@ export async function POST(req: NextRequest) {
                 return NextResponse.json({ success: true, mode: 'UPDATE', id: existing.id });
             }
 
-            // If not existing, we'll continue to the universal INSERT below, but with dataUri
+            // Insert new record
             const { data: inserted, error: insErr } = await supabase
                 .from('permanent_vault')
                 .insert({
                     asset_type: assetType,
-                    storage_url: dataUri,
+                    storage_url: storageUrl,
                     asset_name: assetName,
                     source_project_id: projectId,
                     metadata: metadata

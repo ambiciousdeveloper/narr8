@@ -2,8 +2,6 @@
 
 import { useState, useEffect, Suspense } from 'react';
 import { motion } from 'framer-motion';
-import { NovelScribe } from '@/agents/chamber-2-4-novel';
-import { StoryCritic } from '@/agents/chamber-2-6-critic';
 import { createClient } from '@supabase/supabase-js';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useLanguage } from '../context/LanguageContext';

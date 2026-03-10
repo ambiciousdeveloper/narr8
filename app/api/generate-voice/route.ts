@@ -326,7 +326,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
             success: true,
             audioData: base64Audio, // Still return base64 for immediate playback in UI if needed
-            imageUrl: permanentUrl, // Return the URL as well
+            audioUrl: permanentUrl, // Return the permanent storage URL
             textUsed: previewText,
             voiceName: selectedVoiceName
         });
