@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AgentFactory, type AgentResponse } from './chamber-0-repository';
+import { safeParseJSON } from '../lib/json-repair';
 import {
     GEMINI_MODEL,
     DEFAULT_SCRIPT_DENSITY,
@@ -27,7 +28,7 @@ export class ScriptScribe {
     ): Promise<AgentResponse> {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
         const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-        const creativity = Math.min(0.9, 0.7 + (level * 0.05));
+        // Note: ScriptScribe uses `currentTemp` (dynamic per-chunk), not a static creativity value.
 
         // 1. Unified Configuration Fetching
         const [volumeSop, sopGuidelines, sopPersona] = await Promise.all([
@@ -173,8 +174,9 @@ export class ScriptScribe {
                 synthesized_title_kr: activeBlueprint?.saga_title_kr || "Generated Script",
                 synthesized_kr: language === 'KO' ? fullScript.trim() : "",
                 synthesized_en: language === 'EN' ? fullScript.trim() : "",
-                reasoning: `Screenplay via ScriptScribe V135 Fail-Safe. Instruction isolation active.`,
-                characters: finalCharacters
+                reasoning: `Screenplay via ScriptScribe V141.`,
+                characters: finalCharacters,
+                source_metadata: { context_state: contextState }
             },
             rawText: fullScript.trim() || lastRawResponse
         };
@@ -320,33 +322,4 @@ function hasDialogue(content: string): boolean {
     return false;
 }
 
-function safeParseJSON(text: string): AgentResponse {
-    let jsonString = text.trim();
-    try {
-        const match = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-        if (match) jsonString = match[1];
-        else {
-            const start = text.indexOf('{');
-            const end = text.lastIndexOf('}');
-            if (start !== -1 && end !== -1 && end > start) jsonString = text.substring(start, end + 1);
-        }
-        jsonString = jsonString.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, "").replace(/,(\s*[}\]])/g, "$1");
-        return { success: true, data: JSON.parse(jsonString), rawText: text };
-    } catch (e) {
-        return aggressiveRepairJSON(jsonString, text);
-    }
-}
-
-function aggressiveRepairJSON(jsonString: string, originalText: string): AgentResponse {
-    try {
-        let repaired = jsonString.replace(/(": ")([\s\S]*?)(",?\n\s*")/g, (m, p, c, s) => p + c.replace(/(?<!\\)"/g, '\\"') + s);
-        const open = (repaired.match(/\{/g) || []).length;
-        const close = (repaired.match(/\}/g) || []).length;
-        if (open > close) repaired += "}".repeat(open - close);
-        return { success: true, data: JSON.parse(repaired), rawText: originalText };
-    } catch {
-        const match = originalText.match(/"content":\s*"([\s\S]*?)"(?=\s*,\s*"|(?:\s*\n?\s*\}))/);
-        if (match) return { success: true, data: { content: match[1].replace(/\\"/g, '"').replace(/\\n/g, '\n') }, rawText: originalText };
-        return { success: false, error: "JSON Final Failure", rawText: originalText };
-    }
-}
+// safeParseJSON is imported from lib/json-repair.ts

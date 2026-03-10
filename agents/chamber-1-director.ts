@@ -245,7 +245,7 @@ export class GrandDirector {
 
     const prompt = `
         Role: Master Narrative Architect
-        Objective: Expand the provided synopsis into a detailed sequence of 5-10 narrative beats.
+        Objective: Expand the provided synopsis into a detailed sequence of 8-15 narrative beats.
         
         [WORLD SETTINGS]
         ${worldSettings.substring(0, 5000)}
@@ -289,7 +289,7 @@ export class GrandDirector {
 
     const prompt = `
         Role: Narrative Analyst for Screenplay Adaptation
-        Objective: Deconstruct the provided NOVEL PROSE into a sequence of 10-20 screenplay-ready narrative beats.
+        Objective: Deconstruct the provided NOVEL PROSE into a sequence of 8-15 screenplay-ready narrative beats.
 
         [INSTRUCTION]
         - Analyze the pacing, events, and dialogue in the prose.

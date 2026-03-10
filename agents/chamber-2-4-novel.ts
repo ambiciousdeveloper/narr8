@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { AgentFactory, type AgentResponse } from './chamber-0-repository';
+import { safeParseJSON } from '../lib/json-repair';
 import {
     GEMINI_MODEL,
     DEFAULT_NOVEL_DENSITY,
@@ -163,8 +164,15 @@ export class NovelScribe {
                     }
                     if (data.source_metadata?.context_state) lastContextState = { ...lastContextState, ...data.source_metadata.context_state };
                 } else {
-                    console.warn(`>>> Section ${i + 1} Failed. Using raw text as fallback.`);
-                    const fallbackContent = chunkResponse.rawText || "";
+                    console.warn(`>>> Section ${i + 1} Failed. Using filtered fallback.`);
+                    // Filter out JSON structure lines to avoid leaking system text into prose
+                    const rawLines = (chunkResponse.rawText || "").split('\n');
+                    const proseLines = rawLines.filter(l =>
+                        !l.trim().startsWith('{') && !l.trim().startsWith('}') &&
+                        !l.trim().startsWith('"') && !l.trim().startsWith('[') &&
+                        l.trim().length > 10
+                    );
+                    const fallbackContent = proseLines.length > 2 ? proseLines.join('\n') : (chunkResponse.rawText || "");
                     fullStory += (fallbackContent + "\n\n");
                 }
             }
@@ -354,94 +362,4 @@ function buildScribePrompt(
 }
 
 
-function safeParseJSON(text: string): AgentResponse {
-    let jsonString = text.trim();
-
-    try {
-        // Standard code block extraction
-        const codeBlockMatch = text.match(/```(?:json)?([\s\S]*?)```/);
-        if (codeBlockMatch) {
-            jsonString = codeBlockMatch[1].trim();
-        } else {
-            const firstBrace = text.indexOf('{');
-            const lastBrace = text.lastIndexOf('}');
-            if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-                jsonString = text.substring(firstBrace, lastBrace + 1);
-            }
-        }
-
-        // Phase 1: Basic Cleaning
-        jsonString = jsonString
-            .replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, "") // Remove control chars
-            .replace(/,(\s*[}\]])/g, "$1"); // Remove trailing commas
-
-        return { success: true, data: JSON.parse(jsonString), rawText: text };
-    } catch (e) {
-        console.warn(">>> JSON Parse Failed. Starting Armored Repair...");
-        return aggressiveRepairJSON(jsonString, text);
-    }
-}
-
-function aggressiveRepairJSON(jsonString: string, originalText: string): AgentResponse {
-    let repaired = jsonString;
-
-    try {
-        // Repair 1: Handle unescaped double quotes inside large string values.
-        // This regex looks for string values that might contain internal quotes.
-        // It matches "key": " ... " and tries to clean the content.
-        repaired = repaired.replace(/(": ")([\s\S]*?)(",?\n\s*")/g, (match, prefix, content, suffix) => {
-            // Escape any internal quotes that aren't already escaped
-            const sanitized = content.replace(/(?<!\\)"/g, '\\"');
-            return prefix + sanitized + suffix;
-        });
-
-        // Repair 2: Balance braces
-        let openBraces = (repaired.match(/\{/g) || []).length;
-        let closeBraces = (repaired.match(/\}/g) || []).length;
-        if (openBraces > closeBraces) repaired += "}".repeat(openBraces - closeBraces);
-
-        // Repair 3: Remove potential markdown garbage outside the JSON
-        const secondAttempt = repaired.match(/\{[\s\S]*\}/);
-        if (secondAttempt) repaired = secondAttempt[0]!;
-
-        return { success: true, data: JSON.parse(repaired), rawText: originalText };
-    } catch (e2) {
-        console.error(">>> Armored Repair Failed. Attempting Last Resort Recovery...");
-
-        // LAST RESORT: Try to find content, prose, synthesized_kr or synthesized_en using regex
-        try {
-            const contentMatch = originalText.match(/"(?:content|prose|synthesized_kr|synthesized_en)":\s*"([\s\S]*?)"(?=\s*,\s*"|(?:\s*\n?\s*\}))/);
-
-            if (contentMatch && contentMatch[1]) {
-                const recovered = contentMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
-                return {
-                    success: true,
-                    data: {
-                        content: recovered,
-                        synthesized_kr: recovered, // Legacy compatibility
-                        synthesized_title_kr: "Recovered Story",
-                        reasoning: "JSON structure lost; prose recovered via regex."
-                    },
-                    rawText: originalText
-                };
-            }
-
-            // VERY LAST RESORT: If it doesn't look like JSON at all, maybe it's just raw text
-            if (originalText.length > 100 && !originalText.includes('{')) {
-                return {
-                    success: true,
-                    data: {
-                        content: originalText.trim(),
-                        synthesized_kr: originalText.trim(),
-                        reasoning: "Raw text fallback (No JSON detected)"
-                    },
-                    rawText: originalText
-                };
-            }
-        } catch (e3) {
-            console.error(">>> Last Resort Recovery Failed:", e3);
-        }
-
-        return { success: false, error: "JSON Parse Error (Massive Content)", rawText: originalText };
-    }
-}
+// safeParseJSON is imported from lib/json-repair.ts
