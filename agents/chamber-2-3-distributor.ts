@@ -72,6 +72,10 @@ export class StoryDistributor {
             const text = response.text();
             const jsonStart = text.indexOf('[');
             const jsonEnd = text.lastIndexOf(']') + 1;
+            if (jsonStart === -1 || jsonEnd <= jsonStart) {
+                console.error(">>> Distributor: No valid JSON array found in response.");
+                return [];
+            }
             return JSON.parse(text.substring(jsonStart, jsonEnd));
         } catch (err) {
             console.error(">>> Distributor Failed.", err);

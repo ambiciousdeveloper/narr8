@@ -82,12 +82,14 @@ export const StoryCritic = {
             };
         } catch (error) {
             console.error(">>> Critic Agent Error:", error);
-            // Fail safe: Approve if critic dies, but warn.
+            // Fail safe: reject if critic fails to avoid saving low-quality content silently.
+            // Caller should handle approved: false by logging a warning and continuing
+            // (since critique is currently advisory, not a hard gate).
             return {
-                score: 50,
-                approved: true,
-                issues: ["Critic Agent Failed"],
-                feedback: "Critic system offline. Proceeding with caution."
+                score: 0,
+                approved: false,
+                issues: ["Critic Agent Failed - result unreliable"],
+                feedback: "Critic system offline. Manual review recommended."
             };
         }
     }

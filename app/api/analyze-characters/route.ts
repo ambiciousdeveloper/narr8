@@ -89,8 +89,17 @@ export async function POST(req: NextRequest) {
         console.log(`>>> [Character Engine] Suggested Slots: ${Array.isArray(suggestedCharacters) ? suggestedCharacters.length : 0} items`);
         console.log(`>>> [Character Engine] Existing Inventory: ${existingChars?.length || 0} characters`);
         const result = await model.generateContent(prompt);
-        const jsonMatch = result.response.text().match(/\[[\s\S]*\]/);
-        const charList = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+        const rawText = result.response.text();
+        const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+        let charList: any[] = [];
+        if (jsonMatch) {
+            try {
+                charList = JSON.parse(jsonMatch[0]);
+            } catch (parseErr) {
+                console.error(">>> [Character Engine] JSON parse failed:", parseErr);
+                charList = [];
+            }
+        }
 
         let successCount = 0;
         let failCount = 0;

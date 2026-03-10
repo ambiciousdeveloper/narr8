@@ -185,6 +185,8 @@ export async function POST(req: NextRequest) {
       let previousState = null;
       let lastSentence = "";
       let limitTime = "Unknown";
+      // [N+1 방지] 루프 내 캐릭터 sync 대신, 모든 에피소드 생성 후 한 번에 처리
+      const allSuggestedChars: any[] = [];
 
       for (let i = 1; i <= dynamicEpisodeCount; i++) {
         const currentBeat = beats[i - 1];
@@ -197,17 +199,17 @@ export async function POST(req: NextRequest) {
           .filter(e => !assignedIds.includes(e.id) && !completedEvents.some(ce => ce.id === e.id))
           .map(e => `- ${e.description}`).join('\n');
 
-        console.log(`>>> [L3 Gen] Episode ${i}/5 | Target: ${currentBeat.assigned_events?.map(e => e.description).join(', ')}`);
+        console.log(`>>> [L3 Gen] Episode ${i}/${dynamicEpisodeCount} | Target: ${currentBeat.assigned_events?.map(e => e.description).join(', ')}`);
 
         const result = await analyzeSingleEpisode({
           level,
           context: l2Synopsis,
           isAdapted,
           episodeNumber: i,
-          totalEpisodes: 5,
+          totalEpisodes: dynamicEpisodeCount,
           previousContextState: previousState,
           blueprintTimeline: blueprint?.timeline || [],
-          blueprintCharacters: blueprint?.character_arcs || [], // Pass L1 character list
+          blueprintCharacters: blueprint?.character_arcs || [],
           timeAnchor,
           sagaRange,
           limitTime,
@@ -224,29 +226,19 @@ export async function POST(req: NextRequest) {
         const sceneData = result.data.episode;
         const bodyText = sceneData.synthesized_body_kr || "";
 
-        // [V4.0] Centralized Identity Sync
+        // [N+1 Fix] 캐릭터를 누적 수집만 하고, 루프 밖에서 일괄 sync
         if (result.data?.characters && result.data.characters.length > 0) {
-          try {
-            const charEngineUrl = new URL('/api/analyze-characters', req.url);
-            await fetch(charEngineUrl.toString(), {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                projectId,
-                suggestedCharacters: result.data.characters,
-                sceneText: bodyText,
-                isAdapted
-              })
-            });
-          } catch (err) {
-            console.error(">>> [L3 Dispatcher] Character sync failed:", err);
-          }
+          allSuggestedChars.push(...result.data.characters);
         }
 
         // [AUTO-CRITIC] Validate against assigned events
         const logicRules = currentBeat.assigned_events?.map(e => e.description) || [];
         const critique = await StoryCritic.critique(bodyText, { timeAnchor, limitTime, sagaRange, logicRules });
-        console.log(`>>> Episode ${i} Score: ${critique.score} (Approved: ${critique.approved})`);
+        if (!critique.approved) {
+            console.warn(`>>> Episode ${i} Critic REJECTED (Score: ${critique.score}): ${critique.issues.join(', ')}`);
+        } else {
+            console.log(`>>> Episode ${i} Score: ${critique.score} (Approved: ${critique.approved})`);
+        }
 
         // Record progress
         completedEvents.push(...(currentBeat.assigned_events || []));
@@ -254,6 +246,30 @@ export async function POST(req: NextRequest) {
         previousState = sceneData.source_metadata?.context_state;
         const sentences = bodyText.split(/[.!?]\s+/);
         lastSentence = sentences[sentences.length - 1] || "";
+      }
+
+      // [N+1 Fix] 루프 완료 후 중복 제거 + 일괄 캐릭터 sync
+      if (allSuggestedChars.length > 0) {
+        const uniqueChars = Array.from(
+          new Map(allSuggestedChars.map(c => [c.reinterpreted_name_kr || c.name_kr, c])).values()
+        );
+        const allBodyText = episodes.map(e => e.synthesized_body_kr || '').join('\n');
+        console.log(`>>> [Batch Character Sync] ${allSuggestedChars.length} collected → ${uniqueChars.length} unique`);
+        try {
+          const charEngineUrl = new URL('/api/analyze-characters', req.url);
+          await fetch(charEngineUrl.toString(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              projectId,
+              suggestedCharacters: uniqueChars,
+              sceneText: allBodyText.substring(0, 5000),
+              isAdapted
+            })
+          });
+        } catch (err) {
+          console.error(">>> [Batch Character Sync] Failed:", err);
+        }
       }
 
       agentResult = { success: true, data: { items: episodes } };
