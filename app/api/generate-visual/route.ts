@@ -44,6 +44,7 @@ export async function POST(req: NextRequest) {
                 .single();
 
             if (initErr) throw new Error("Failed to initialize visual settings: " + initErr.message);
+            if (!newVal) throw new Error("Visual settings insert returned no data");
             visualInfo = newVal;
         }
 

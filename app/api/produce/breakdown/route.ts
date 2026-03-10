@@ -125,6 +125,9 @@ export async function POST(req: NextRequest) {
         const rawTimeline = JSON.parse(jsonMatch[0]);
 
         // 5. Link Assets to Timeline
+        if (!rawTimeline?.tracks?.[0]?.clips) {
+            throw new Error('Invalid timeline structure: missing tracks or clips');
+        }
         let currentTime = 0;
         const processedClips = rawTimeline.tracks[0].clips.map((clip: any, idx: number) => {
             const charData = charMap.get(clip.character);
