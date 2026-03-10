@@ -438,7 +438,7 @@ function parseModelOutput(text: string): AgentResponse {
 
     for (let i = 0; i < s.length; i++) {
       const char = s[i];
-      if (char === '"' && s[i - 1] !== '\\') currentInQuote = !currentInQuote;
+      if (char === '"' && (i === 0 || s[i - 1] !== '\\' || (i >= 2 && s[i - 2] === '\\'))) currentInQuote = !currentInQuote;
       if (!currentInQuote) {
         if (char === '{' || char === '[') {
           stack.push(char === '{' ? '}' : ']');

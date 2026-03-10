@@ -144,9 +144,9 @@ export async function POST(req: NextRequest) {
             metadata: {
                 titles: {
                     novel_kr: novelKr.synthesized_title_kr,
-                    novel_en: novelEn.synthesized_title_en,
+                    novel_en: novelEn.synthesized_title_kr,
                     script_kr: scriptKr.synthesized_title_kr,
-                    script_en: scriptEn.synthesized_title_en
+                    script_en: scriptEn.synthesized_title_kr
                 },
                 reasoning: novelKr.reasoning // Representative reasoning
             }
