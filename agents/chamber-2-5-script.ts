@@ -345,43 +345,75 @@ function hasDialogue(content: string): boolean {
 }
 
 /**
- * V142: Dedicated Dialogue Injection Pass
- * Runs ONLY when the main generation loop produces zero dialogue after all retries.
- * Separates the "add dialogue" task from "adapt prose" to remove competing priorities.
+ * V142: Guaranteed Per-Scene Dialogue Injection
+ * Runs when the main generation loop produces zero dialogue after all retries.
+ *
+ * Strategy: instead of asking the AI to rewrite the whole script (which it keeps ignoring),
+ * we split by S# scene, extract the character name per scene, batch-generate one dialogue
+ * line per scene in a single focused LLM call, then INSERT them programmatically.
+ * The insertion format is controlled by our code, not the AI — guaranteeing correct format.
  */
 async function injectDialoguePass(script: string, charContext: string, model: any): Promise<string> {
-    const prompt = `You are a dialogue writer. Below is a screenplay with NO spoken lines.
-Your ONLY job is to INSERT dialogue into this screenplay.
+    // Split into S# scene blocks
+    const sceneBlocks = script.split(/(?=S#\s*\d+\.)/).filter(b => b.trim());
+    if (!sceneBlocks.length) return script;
 
-RULES:
-- Add 1-3 spoken lines to EACH scene (S# heading)
-- Format strictly: character name alone on one line, their spoken words on the next line
-- Do NOT rewrite or remove any existing lines — only INSERT new dialogue lines
-- Dialogue must fit the scene's action and each character's personality
-- You are INVENTING dialogue, not translating the action
-- If only one character is in the scene, they may speak to themselves (aloud, not internally)
+    // For each scene, find the first Korean character name (2-4 chars followed by comma)
+    const sceneInfos = sceneBlocks.map((block, idx) => {
+        const nameMatch = block.match(/\b([가-힣]{2,4}),[\s]/);
+        const charName = nameMatch && !EXCLUDED_WORDS.has(nameMatch[1]) ? nameMatch[1] : null;
+        return { idx, block, charName };
+    });
+
+    const scenesWithChars = sceneInfos.filter(s => s.charName);
+    if (!scenesWithChars.length) {
+        console.warn(`>>> [V142] No character names found in scenes. Cannot inject dialogue.`);
+        return script;
+    }
+
+    // Batch-generate one dialogue line per scene in a single LLM call
+    const batchPrompt = `You are writing Korean screenplay dialogue.
+For each numbered scene below, write ONE short Korean spoken line for the named character.
+Output ONLY a JSON array of strings, one per scene, in the same order.
+The lines must be natural spoken Korean (not action descriptions).
+Example output: ["이게 맞는 길인가...", "거기서 뭐 하는 거야?", "아무 말 하지마."]
 
 [CHARACTER INFO]
-${charContext.substring(0, 2000)}
+${charContext.substring(0, 1500)}
 
-[SCREENPLAY TO ADD DIALOGUE TO]
-${script}
-
-Output the complete screenplay with your dialogue additions. Output ONLY the screenplay text, no JSON, no commentary.`;
+[SCENES]
+${scenesWithChars.map((s, i) => `Scene ${i + 1} — ${s.charName} speaks:\n${s.block.substring(0, 250)}`).join('\n\n')}`;
 
     try {
         const result = await model.generateContent({
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.8, maxOutputTokens: 12000 }
+            contents: [{ role: 'user', parts: [{ text: batchPrompt }] }],
+            generationConfig: { temperature: 0.8, maxOutputTokens: 2000 }
         });
-        const injected = result.response.text().trim();
-        // Only use the injected version if it actually added dialogue
-        if (injected && hasDialogue(injected)) {
-            console.log(`>>> [V142] Dialogue injection successful.`);
-            return injected;
+        const responseText = result.response.text();
+        const match = responseText.match(/\[[\s\S]*\]/);
+        if (!match) {
+            console.warn(`>>> [V142] Batch dialogue generation returned no JSON array.`);
+            return script;
         }
-        console.warn(`>>> [V142] Injection pass also produced no dialogue. Using original.`);
-        return script;
+
+        const dialogueLines: string[] = JSON.parse(match[0]);
+
+        // Programmatically insert each dialogue line into the correct scene block
+        const updatedBlocks = [...sceneBlocks];
+        scenesWithChars.forEach((sceneInfo, i) => {
+            const dialogueLine = (dialogueLines[i] || "").trim();
+            if (!dialogueLine) return;
+
+            const lines = sceneInfo.block.split('\n');
+            // Insert after the second non-empty line (after scene heading + first action)
+            const insertAt = Math.min(3, lines.length);
+            lines.splice(insertAt, 0, `${sceneInfo.charName}\n${dialogueLine}`);
+            updatedBlocks[sceneInfo.idx] = lines.join('\n');
+        });
+
+        const injected = updatedBlocks.join('');
+        console.log(`>>> [V142] Dialogue injected into ${scenesWithChars.length} scenes programmatically.`);
+        return injected;
     } catch (err) {
         console.error(`>>> [V142] Injection pass failed:`, err);
         return script;
