@@ -124,6 +124,14 @@ export class ScriptScribe {
                         continue;
                     }
 
+                    // V141: Dialogue Enforcement - Reject silent scripts and retry
+                    if (content && !hasDialogue(content) && retryCount < 2) {
+                        console.warn(`>>> [V141 Dialogue Enforcer] No dialogue detected in chunk ${i + 1}. Retrying with dialogue injection...`);
+                        currentTemp = Math.min(0.9, currentTemp + 0.2);
+                        retryCount++;
+                        continue;
+                    }
+
                     if (content) {
                         fullScript += (content + "\n\n");
                         lastChunkHeader = currentHeader;
@@ -220,12 +228,18 @@ S# 10. INT. 낡은 무도장 - 밤
 2. **HIGH DENSITY**: Merge multiple paragraphs into one dense S# sequence. NO "S1", "S2" shortcuts.
 3. **ZERO PROSE LEAK**: No "feels", "thinks", "decides". Only pixel-level physical actions.
 4. **DIALOGUE PURITY**: No "(혼잣말)", "(침묵)". Action lines for silence.
-5. **DIALOGUE MANDATORY**: Every scene MUST contain at least ONE spoken dialogue line. Characters MUST speak. A scene with ZERO dialogue lines is INVALID and will be rejected.
+5. **DIALOGUE MANDATORY**: Every scene MUST contain at least ONE spoken dialogue line. Characters MUST speak. A scene with ZERO dialogue lines is INVALID and will be rejected. OUTPUT WITH NO DIALOGUE WILL BE DISCARDED.
 6. **NO CONSECUTIVE SILENT SCENES**: You MUST NOT write 3 or more consecutive scenes without dialogue. Insert spoken lines to break any silent streak.
 7. **DIALOGUE DENSITY**: At least 30% of all lines in the output must be character dialogue lines (character name on its own line followed by spoken text).
 8. **ANTI-NARRATION**: Do NOT write scenes that only describe environment, atmosphere, or internal state. Every scene must advance through CHARACTER SPEECH AND ACTION together.
+9. **DIALOGUE FORMAT**: Write the character name alone on one line, then the spoken line below it. Example:
+김해리
+여기서 뭘 하는 거요?
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
+
+[STORY BEATS]
+${p.plot}
 
 [SOURCE PROSE]
 ${p.sourceProse}
@@ -269,6 +283,23 @@ function updateContextState(content: string, state: any) {
         lastSceneNumber: lastScene,
         lastThreeLines: lines.slice(-3).join('\n')
     };
+}
+
+/**
+ * V141: Dialogue Presence Validator
+ * Detects at least one character name line followed by a dialogue line.
+ */
+function hasDialogue(content: string): boolean {
+    const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+    for (let i = 0; i < lines.length - 1; i++) {
+        const line = lines[i];
+        // Korean name (2-6 chars) or uppercase English name alone on line
+        const isNameLine = /^[가-힣]{2,6}$/.test(line) || /^[A-Z][A-Z\s]{1,20}$/.test(line);
+        if (isNameLine && !lines[i + 1].startsWith('S#') && lines[i + 1].length > 2) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function safeParseJSON(text: string): AgentResponse {
