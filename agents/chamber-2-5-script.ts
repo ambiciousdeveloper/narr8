@@ -240,13 +240,14 @@ S# 10. INT. 낡은 무도장 - 밤
 2. **HIGH DENSITY**: Merge multiple paragraphs into one dense S# sequence. NO "S1", "S2" shortcuts.
 3. **ZERO PROSE LEAK**: No "feels", "thinks", "decides". Only pixel-level physical actions.
 4. **DIALOGUE PURITY**: No "(혼잣말)", "(침묵)". Action lines for silence.
-5. **DIALOGUE MANDATORY**: Every scene MUST contain at least ONE spoken dialogue line. Characters MUST speak. A scene with ZERO dialogue lines is INVALID and will be rejected. OUTPUT WITH NO DIALOGUE WILL BE DISCARDED.
+5. **DIALOGUE MANDATORY**: Every scene MUST contain at least ONE spoken dialogue line. Characters MUST speak. A scene with ZERO dialogue lines is INVALID and will be rejected. OUTPUT WITH NO DIALOGUE WILL BE DISCARDED. IF THE SOURCE HAS NO DIALOGUE, YOU MUST INVENT APPROPRIATE DIALOGUE — DO NOT use the absence of dialogue in the source as an excuse to omit it.
 6. **NO CONSECUTIVE SILENT SCENES**: You MUST NOT write 3 or more consecutive scenes without dialogue. Insert spoken lines to break any silent streak.
 7. **DIALOGUE DENSITY**: At least 30% of all lines in the output must be character dialogue lines (character name on its own line followed by spoken text).
 8. **ANTI-NARRATION**: Do NOT write scenes that only describe environment, atmosphere, or internal state. Every scene must advance through CHARACTER SPEECH AND ACTION together.
 9. **DIALOGUE FORMAT**: Write the character name alone on one line, then the spoken line below it. Example:
 김해리
 여기서 뭘 하는 거요?
+10. **INVENT DIALOGUE**: Screenwriters CREATE dialogue. Even when adapting prose with no dialogue, you MUST give characters voices. Invent lines that reveal character, advance plot, or react to the situation.
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
@@ -300,14 +301,19 @@ function updateContextState(content: string, state: any) {
 /**
  * V141: Dialogue Presence Validator
  * Detects at least one character name line followed by a dialogue line.
+ * False-positive guard: excludes common time/place words (새벽, 아침, 밤, etc.)
  */
+const EXCLUDED_WORDS = new Set(['새벽', '아침', '밤', '낮', '저녁', '오전', '오후', '실내', '실외', '골목', '거리', '현재', '과거', '회상']);
+
 function hasDialogue(content: string): boolean {
     const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
     for (let i = 0; i < lines.length - 1; i++) {
         const line = lines[i];
-        // Korean name (2-6 chars) or uppercase English name alone on line
-        const isNameLine = /^[가-힣]{2,6}$/.test(line) || /^[A-Z][A-Z\s]{1,20}$/.test(line);
-        if (isNameLine && !lines[i + 1].startsWith('S#') && lines[i + 1].length > 2) {
+        // Korean name: 2-6 chars, not a time/place word, not starting with S# or punctuation
+        const isKoreanName = /^[가-힣]{2,6}$/.test(line) && !EXCLUDED_WORDS.has(line) && !line.includes('.');
+        // English character name: all caps, 2-25 chars
+        const isEnglishName = /^[A-Z][A-Z\s]{1,24}$/.test(line);
+        if ((isKoreanName || isEnglishName) && !lines[i + 1].startsWith('S#') && lines[i + 1].length > 4) {
             return true;
         }
     }

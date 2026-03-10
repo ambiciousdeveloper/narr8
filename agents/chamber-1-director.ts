@@ -288,15 +288,19 @@ export class GrandDirector {
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
     const prompt = `
-        Role: Narrative Analyst
-        Objective: Deconstruct the provided NOVEL PROSE into a sequence of 10-20 precise narrative beats.
-        
+        Role: Narrative Analyst for Screenplay Adaptation
+        Objective: Deconstruct the provided NOVEL PROSE into a sequence of 10-20 screenplay-ready narrative beats.
+
         [INSTRUCTION]
         - Analyze the pacing, events, and dialogue in the prose.
         - The resulting beats must represent exactly what happens in this specific prose, no more, no less.
         - Each beat should describe a distinct scene or movement suitable for screenplay conversion.
+        - CRITICAL: For each beat, you MUST specify what the character(s) SAY in that scene.
+          If the prose has no dialogue, INVENT realistic dialogue that fits the scene and character.
+          Format: "Beat N: [action description] — [CHARACTER NAME] says: '[invented dialogue line]'"
+        - Every beat MUST include a spoken line. Beats with no dialogue are invalid.
         - Return ONLY a JSON array of strings.
-        
+
         [CHARACTER CONTEXT]
         ${charContext}
 
