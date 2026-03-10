@@ -92,9 +92,9 @@ export class ScriptScribe {
                     plot: chunk,
                     characters: charContext,
                     blueprint: activeBlueprint,
+                    settings: worldSettings,
                     // V140: Stabilized Continuity Bridge.
                     chronicle: i === 0 ? chronicle : `[STABLE_BRIDGE]\n${fullScript.slice(-2500)}\n\n[TASK]: Resume from S# ${contextState.lastSceneNumber + 1}.`,
-                    settings: worldSettings,
                     language,
                     targetChars: sectionLengthTarget,
                     sourceProse: slicedRef,
@@ -165,7 +165,13 @@ export class ScriptScribe {
         }
 
         if (!fullScript.trim()) {
-            return { success: false, error: "대본 생성 결과가 비어있습니다. (V135 파싱 실패)", rawText: lastRawResponse };
+            return { success: false, error: "대본 생성 결과가 비어있습니다.", rawText: lastRawResponse };
+        }
+
+        // V142: Post-process dialogue injection — final safety net if all retries failed
+        if (!hasDialogue(fullScript)) {
+            console.warn(`>>> [V142 Dialogue Injection] All retries produced no dialogue. Running dedicated injection pass...`);
+            fullScript = await injectDialoguePass(fullScript, charContext, model);
         }
 
         return {
@@ -222,6 +228,11 @@ DO NOT submit another response without spoken dialogue.
 🚨 END ALERT 🚨
 ` : '';
 
+    const bp = p.blueprint || {};
+    const bpRules = bp.world_bible?.rules_kr || "";
+    const bpGlossary = bp.glossary ? JSON.stringify(bp.glossary).substring(0, 1000) : "";
+    const bpChars = bp.character_arcs ? JSON.stringify(bp.character_arcs).substring(0, 1500) : "";
+
     return `
 [[SYSTEM_PROTOCOL]]
 [ROLE]
@@ -252,6 +263,17 @@ S# 10. INT. 낡은 무도장 - 밤
 10. **INVENT DIALOGUE**: Screenwriters CREATE dialogue. Even when adapting prose with no dialogue, you MUST give characters voices. Invent lines that reveal character, advance plot, or react to the situation.
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
+
+[CHARACTER DB]
+${(p.characters || "").substring(0, 3000)}
+
+[BLUEPRINT CONTEXT]
+World Rules: ${bpRules}
+Character Arcs: ${bpChars}
+Glossary: ${bpGlossary}
+
+[WORLD SETTINGS]
+${(p.settings || "").substring(0, 2000)}
 
 [STORY BEATS]
 ${p.plot}
@@ -320,6 +342,50 @@ function hasDialogue(content: string): boolean {
         }
     }
     return false;
+}
+
+/**
+ * V142: Dedicated Dialogue Injection Pass
+ * Runs ONLY when the main generation loop produces zero dialogue after all retries.
+ * Separates the "add dialogue" task from "adapt prose" to remove competing priorities.
+ */
+async function injectDialoguePass(script: string, charContext: string, model: any): Promise<string> {
+    const prompt = `You are a dialogue writer. Below is a screenplay with NO spoken lines.
+Your ONLY job is to INSERT dialogue into this screenplay.
+
+RULES:
+- Add 1-3 spoken lines to EACH scene (S# heading)
+- Format strictly: character name alone on one line, their spoken words on the next line
+- Do NOT rewrite or remove any existing lines — only INSERT new dialogue lines
+- Dialogue must fit the scene's action and each character's personality
+- You are INVENTING dialogue, not translating the action
+- If only one character is in the scene, they may speak to themselves (aloud, not internally)
+
+[CHARACTER INFO]
+${charContext.substring(0, 2000)}
+
+[SCREENPLAY TO ADD DIALOGUE TO]
+${script}
+
+Output the complete screenplay with your dialogue additions. Output ONLY the screenplay text, no JSON, no commentary.`;
+
+    try {
+        const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.8, maxOutputTokens: 12000 }
+        });
+        const injected = result.response.text().trim();
+        // Only use the injected version if it actually added dialogue
+        if (injected && hasDialogue(injected)) {
+            console.log(`>>> [V142] Dialogue injection successful.`);
+            return injected;
+        }
+        console.warn(`>>> [V142] Injection pass also produced no dialogue. Using original.`);
+        return script;
+    } catch (err) {
+        console.error(`>>> [V142] Injection pass failed:`, err);
+        return script;
+    }
 }
 
 // safeParseJSON is imported from lib/json-repair.ts
