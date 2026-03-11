@@ -61,10 +61,13 @@ export class ScriptScribe {
         const novelParagraphs = refText.split(/\n\n+/).filter(p => p.trim().length > 0);
 
         const idealSections = Math.ceil(totalTargetChars / Number(sectionLimit));
-        const actualSections = Math.max(1, Math.min(beats.length, idealSections));
+        // beats.length가 너무 적으면(fallback=1) idealSections 그대로 사용해 여러 번 호출
+        const actualSections = beats.length <= 1
+            ? idealSections
+            : Math.max(1, Math.min(beats.length, idealSections));
         const sectionLengthTarget = Math.floor(totalTargetChars / actualSections);
 
-        console.log(`>>> [ScriptScribe V81 Hardened] Target: ${totalTargetChars}, Sections: ${actualSections}`);
+        console.log(`>>> [ScriptScribe V81 Hardened] beats=${beats.length}, idealSections=${idealSections}, actualSections=${actualSections}, targetPerSection=${sectionLengthTarget}, totalTarget=${totalTargetChars}`);
 
         // 3. Unified Generation Loop
         let fullScript = "";
