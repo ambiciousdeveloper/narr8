@@ -100,8 +100,13 @@ export class ScriptScribe {
                     characters: charContext,
                     blueprint: activeBlueprint,
                     settings: worldSettings,
-                    // V140: Stabilized Continuity Bridge.
-                    chronicle: i === 0 ? chronicle : `[STABLE_BRIDGE]\n${fullScript.slice(-2500)}\n\n[TASK]: Resume from S# ${contextState.lastSceneNumber + 1}.`,
+                    // V140: Stabilized Continuity Bridge — only last scene to avoid "story already done" hallucination.
+                    chronicle: i === 0 ? chronicle : (() => {
+                        // Extract only the last scene from fullScript as anchor, not the entire history
+                        const scenes = fullScript.split(/(?=S#\s*\d+\.)/);
+                        const lastScene = scenes[scenes.length - 1]?.trim() || fullScript.slice(-800);
+                        return `[CONTINUATION ANCHOR — last scene written:]\n${lastScene}\n\n[TASK]: Write NEW scenes continuing from S# ${contextState.lastSceneNumber + 1}. Do NOT repeat any of the above.`;
+                    })(),
                     language,
                     targetChars: sectionLengthTarget,
                     sceneAvgChars: Number(sceneAvgChars),
@@ -173,6 +178,18 @@ Output the full expanded screenplay in Korean S# format.`;
                         }
                     } else if (!content) {
                         console.warn(`>>> [V143 Skip] Chunk ${i + 1} has no content. Main generation failed — skipping expansion.`);
+                        // V144: Raw Extract — model may have written screenplay outside the JSON wrapper
+                        const rawLines = lastRawResponse.split('\n').filter(l =>
+                            (l.includes('S#') || /^[가-힣]{2,6}$/.test(l.trim()) || l.length > 30) &&
+                            !l.includes('"content"') && !l.includes('"title"') && !l.includes('"characters"') &&
+                            !l.startsWith('{') && !l.startsWith('}') && !l.startsWith('[') && !l.startsWith(']')
+                        );
+                        if (rawLines.length > 5) {
+                            content = scrubMeta(rawLines.join('\n'));
+                            console.warn(`>>> [V144 Raw Extract] Chunk ${i + 1}: Recovered ${content.length} chars from raw response.`);
+                        } else {
+                            console.warn(`>>> [V144 Raw Extract] Chunk ${i + 1}: Raw response also empty (${lastRawResponse.length} chars). Chunk skipped.`);
+                        }
                     }
 
                     // V141 final density after all passes — if still 0%, use programmatic injection
