@@ -296,31 +296,57 @@ ${chunk}
                             console.log(`>>> [V149 Base Slug Check] Chunk ${i + 1}: OK.`);
                         }
 
-                        // V153: Per-chunk dream scene cap — enforce max 1 sleep/nightmare scene per chunk
-                        // This catches Chunk 1 over-generating dream scenes before the cross-chunk ban activates.
-                        const DREAM_DETECT_V153 = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자'];
+                        // V153: Per-chunk dream scene cap — enforce max 1 sleep/nightmare scene per chunk.
+                        // Detection scans only the slug line + first 3 stage-direction lines of each scene block
+                        // (excludes dialogue lines starting with a character name) to avoid false positives from
+                        // characters mentioning "악몽" in conversation.
+                        const DREAM_DETECT_V153 = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자리', '침대', '누워'];
                         const chunkBlocks = content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim());
-                        const dreamBlocks = chunkBlocks.filter(b => DREAM_DETECT_V153.some(kw => b.includes(kw)));
+                        // Extract only header + stage directions (non-dialogue lines) for detection
+                        function isDreamSceneBlock(block: string): boolean {
+                            const lines = block.split('\n');
+                            // slug line is always first; then collect non-dialogue direction lines (up to 4 lines total)
+                            const directionLines: string[] = [];
+                            for (const line of lines) {
+                                if (directionLines.length >= 4) break;
+                                const trimmed = line.trim();
+                                if (!trimmed) continue;
+                                // Skip pure dialogue lines: lines that start with a known character-name pattern
+                                // (Korean name followed by space or nothing, then dialogue content)
+                                // We heuristically detect dialogue as lines NOT starting with S# and not all-caps slug patterns
+                                // that contain Korean dialogue verbs — treat slug line + stage directions only
+                                const isDialogue = /^[가-힣\s]{1,8}\s/.test(trimmed) && !/^(INT|EXT|S#|내레이터)/.test(trimmed);
+                                if (!isDialogue) directionLines.push(trimmed);
+                            }
+                            const scanText = directionLines.join(' ');
+                            return DREAM_DETECT_V153.some(kw => scanText.includes(kw));
+                        }
+                        const dreamBlocks = chunkBlocks.filter(isDreamSceneBlock);
                         if (dreamBlocks.length > 1) {
                             console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: ${dreamBlocks.length} dream scenes detected (max 1). Requesting consolidation...`);
-                            const consolidatePrompt = `아래 한국어 시나리오에 악몽/꿈/수면 관련 씬(S#)이 ${dreamBlocks.length}개 포함되어 있습니다. 최대 1개만 허용됩니다.
+                            const dreamSceneNums = dreamBlocks.map(b => b.match(/^S#\s*(\d+[A-Za-z]?)\./m)?.[1] ?? '?').join(', ');
+                            const consolidatePrompt = `아래 한국어 시나리오에 악몽/꿈/수면/침대 관련 씬(S#)이 ${dreamBlocks.length}개 포함되어 있습니다 (S# ${dreamSceneNums}). 최대 1개만 허용됩니다.
 규칙:
-1. 악몽/수면 씬 중 가장 극적으로 중요한 씬 1개만 남기고 나머지는 삭제하세요.
-2. 삭제된 씬의 S# 번호와 나머지 씬들의 S# 번호를 순서대로 재정렬하세요.
-3. 씬 내용(대사, 지문)은 절대 변경하지 마세요 — S# 번호와 악몽 씬 삭제만 수행하세요.
-4. 수정된 대본 전체를 그대로 출력하세요.
+1. 악몽/수면/침대 씬 중 가장 극적으로 중요한 씬 1개만 남기고 나머지는 완전히 삭제하세요.
+2. 삭제된 씬 번호를 포함하여 모든 S# 번호를 1부터 순서대로 재정렬하세요.
+3. 씬 내부 대사와 지문은 절대 변경하지 마세요.
+4. 수정된 대본 전체를 그대로 출력하세요. 설명이나 주석을 추가하지 마세요.
 
 대본:
 ${content}`;
                             try {
                                 const consolidateResult = await model.generateContent({
                                     contents: [{ role: 'user', parts: [{ text: consolidatePrompt }] }],
-                                    generationConfig: { temperature: 0.2, maxOutputTokens: 16000 }
+                                    generationConfig: { temperature: 0.1, maxOutputTokens: 16000 }
                                 });
                                 const consolidated = consolidateResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
-                                if (consolidated && consolidated.length > content.length * 0.7) {
+                                // Accept if output is >= 60% of original (allows meaningful removal)
+                                if (consolidated && consolidated.length > content.length * 0.6) {
                                     content = scrubMeta(consolidated);
-                                    console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: consolidated to ${content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim() && DREAM_DETECT_V153.some(kw => b.includes(kw))).length} dream scene(s).`);
+                                    const remainingDream = content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim() && isDreamSceneBlock(b)).length;
+                                    console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: consolidated to ${remainingDream} dream scene(s).`);
+                                } else {
+                                    console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: consolidation output too short (${consolidated.length}/${content.length}), skipping.`);
                                 }
                             } catch (e) {
                                 console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: consolidation error — ${e}.`);
@@ -457,6 +483,27 @@ const INTERNAL_STATE_PATTERNS: RegExp[] = [
     /[^。\n]*고독과\s*불안[^。\n]*/g,
     /[^。\n]*두려움을\s*느[^。\n]*/g,
     /[^。\n]*[을를]\s*느끼[며고]?[^。\n]*/g,
+    // 결심/다짐 (과거형 포함)
+    /[^。\n]*결심했다[^。\n]*/g,
+    /[^。\n]*결심하[고며][^。\n]*/g,
+    /[^。\n]*다짐한다[^。\n]*/g,
+    /[^。\n]*다짐했다[^。\n]*/g,
+    // 감정 수용/위안
+    /[^。\n]*위안을\s*얻[는는다고며][^。\n]*/g,
+    /[^。\n]*위로[가를이]\s*[^。\n]*/g,
+    /[^。\n]*마음을\s*진정[^。\n]*/g,
+    /[^。\n]*마음이\s*진정[^。\n]*/g,
+    /[^。\n]*온기가\s*[^。\n]*마음[^。\n]*/g,
+    /[^。\n]*따뜻한\s*[^。\n]*마음[^。\n]*/g,
+    // 미래 서술형 (내면 추측)
+    /[^。\n]*\uac83이다\s*$/,
+    /[^。\n]*노력할\s*것이다[^。\n]*/g,
+    /[^。\n]*싸워나갈\s*것이다[^。\n]*/g,
+    /[^。\n]*[을를]\s*찾기\s*위해\s*노력[^。\n]*/g,
+    // 운명/삶 관조
+    /[^。\n]*자신의\s*운명[^。\n]*/g,
+    /[^。\n]*삶의\s*고단함[^。\n]*/g,
+    /[^。\n]*희망을\s*동시에[^。\n]*/g,
     /[^。\n]*믿는다\s*$/,
     /[^。\n]*알\s*수\s*있다\s*$/,
 ];
@@ -589,6 +636,7 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 - HARD STOP: Do NOT write S# ${stopAtScene + 1} or beyond. Stop exactly at S# ${stopAtScene}.
 - Each scene MUST have at least 4 action lines + 2 dialogue exchanges. One-liner scenes are INVALID.
 - Expand each scene with physical detail, reaction shots, and dialogue to fill the target length.
+- MINIMUM LENGTH ENFORCEMENT: If you finish all scenes and your total output is less than ${Math.floor((p.targetChars || 1500) * 0.85)} characters, go back and expand the shortest scenes — add more action lines, more dialogue turns, more environmental detail — until you reach the minimum. Do NOT stop early.
 - COVER ONLY the story beats listed in [STORY BEATS]. Do NOT advance to events not in those beats.
 
 [MANDATORY RULES]
@@ -624,6 +672,7 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 15. **LOCATION TRANSITION**: Whenever the story moves from one distinct location to another (e.g., alley → school, point-A → point-B), you MUST include a brief transition beat showing the character LEAVING or ARRIVING. Never cut directly between two very different locations without a bridging line. Example: one action line + one dialogue is sufficient.
 16. **SCENE COMPLETION**: Every scene you start MUST be fully written before moving to the next. Never end a scene mid-action or mid-dialogue. An incomplete final scene is worse than writing one fewer scene.
 17. **RESOLVED CONFLICT RULE**: Once a conflict is explicitly RESOLVED within the episode (a character overcomes a fear, thanks someone for curing a problem, leaves smiling), do NOT reintroduce the SAME conflict again later in the same episode without a clear narrative justification (e.g., a time-skip, a new cause, or a plot twist that makes sense). Repeating a conflict that was already resolved is a story continuity error. Example: if nightmares are cured in scene 16, scene 17 must NOT show the same character waking from the same nightmares.
+18. **UNIQUE DIALOGUE PER SCENE**: Each character's lines must be DISTINCT across all scenes. Do NOT repeat the same supportive phrases like "넌 할 수 있어", "포기하지 마", "내가 옆에 있잖아" more than ONCE per script. If a supporting character encourages the protagonist multiple times, each scene must use a DIFFERENT approach: challenge them with a question, reference a shared past event, use humor, give concrete advice, or stay silent and act. Copying the same "you can do it" template is a dialogue error.
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
