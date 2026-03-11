@@ -341,7 +341,9 @@ ${chunk}
                         // Detection scans only the slug line + first 3 stage-direction lines of each scene block
                         // (excludes dialogue lines starting with a character name) to avoid false positives from
                         // characters mentioning "악몽" in conversation.
-                        const DREAM_DETECT_V153 = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자리', '침대', '누워', '꿈'];
+                        // '꿈' is intentionally excluded — caught via slug fast-path (- 꿈 suffix) to avoid
+                        // false positives from action words like '꿈틀거리다', '꿈결' etc.
+                        const DREAM_DETECT_V153 = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자리', '침대', '누워'];
                         const chunkBlocks = content.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim());
                         // Extract only header + stage directions (non-dialogue lines) for detection
                         function isDreamSceneBlock(block: string): boolean {
@@ -475,6 +477,9 @@ ${content}`;
 
         // V160: Fix unnumbered bare slug lines embedded in scene bodies
         fullScript = fixUnnumberedSlugs(fullScript);
+
+        // V162: Fix invalid/missing time-of-day in sluglines (계속, 계단-as-time, no dash)
+        fullScript = fixSlugTimeOfDay(fullScript);
 
         // V152: Final internal-state scrub on assembled script
         fullScript = scrubInternalStatements(fullScript);
@@ -615,6 +620,18 @@ const INTERNAL_STATE_PATTERNS: RegExp[] = [
     /[^。\n]*불안감[이가]?\s*엄습[^。\n]*/g,
     /[^。\n]*공포가\s*엄습[^。\n]*/g,
     /[^。\n]*두려움이\s*밀려[^。\n]*/g,
+    // V152 추가 — 이번 대본에서 발견된 잔존 패턴
+    /[^。\n]*불안감이\s*밀려[^。\n]*/g,
+    /[^。\n]*위험이\s*도사리[^。\n]*/g,
+    /[^。\n]*본능적으로\s*[^。\n]*감지[^。\n]*/g,
+    /[^。\n]*온몸의\s*털이\s*쭈뼛[^。\n]*/g,
+    /[^。\n]*폐\s*속\s*깊[^。\n]*불안[^。\n]*/g,
+    /[^。\n]*심장이\s*쿵[^。\n]*/g,
+    /[^。\n]*어둠\s*속에\s*잠[겨긴][^。\n]*/g,
+    /[^。\n]*희망이라는\s*단어[^。\n]*/g,
+    /[^。\n]*고독은\s*깊어[^。\n]*/g,
+    /[^。\n]*눈빛은\s*[가-힣\s]+으로\s*가득[^。\n]*/g,
+    /[^。\n]*두려움에\s*굴복[^。\n]*/g,
 ];
 function scrubInternalStatements(text: string): string {
     const lines = text.split('\n');
@@ -806,15 +823,26 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
     (c) Inner reflection MUST be expressed through a PHYSICAL OBJECT or ACTION — never as a spoken thought. BAD: "내가 왜 이렇게 됐지?" → GOOD: character picks up a photo, stares at it, then puts it face-down.
     (d) After MAXIMUM 3 consecutive scenes with the same character alone, you MUST introduce another character (even briefly — a knock, a call, a passer-by).
 14. **LOCATION VARIETY**:
-    (a) EXACT SLUGLINE: Do NOT write more than 2 consecutive scenes with the EXACT same slugline (same place AND same time of day).
-    (b) GENERAL AREA: Do NOT write more than 4 consecutive scenes in the same GENERAL AREA (same building, same street, same zone), even with different sub-location suffixes (입구/중앙/안쪽 etc.).
-    (c) BATTLE/ACTION: Fight sequences are especially prone to location clumping. After 3 combat scenes in the same area, MOVE to a completely different location — rooftop, building interior, nearby plaza, etc.
+    (a) EXACT SLUGLINE: Do NOT write more than 2 consecutive scenes with the EXACT same slugline (same place AND same time of day). Two scenes with identical sluglines back-to-back is a formatting error.
+    (b) GENERAL AREA: Do NOT write more than **3** consecutive scenes in the same GENERAL AREA (same building, same street, same zone), even with different sub-location suffixes (입구/중앙/안쪽/부엌/방 한가운데/세면대 etc.). Example: "INT. 낡은 방" appearing 3 scenes in a row (방 한가운데, 세면대 앞, 문 앞) is a VIOLATION — move the character outside or to a completely different building after 2 sub-scenes.
+    (c) BATTLE/ACTION: Fight sequences are especially prone to location clumping. After 2 combat scenes in the same area, MOVE to a completely different location — rooftop, building interior, nearby plaza, etc.
+    (d) SLUG TIME FORMAT: Every slugline MUST end with a valid Korean time-of-day: 낮/저녁/밤/새벽/아침/이른 아침/늦은 밤/한밤중. FORBIDDEN time markers: "계속", "계속됨", "이어서", "cont.". If a scene continues in the same time, repeat the actual time word (e.g. "- 아침" again). Sub-locations like "계단", "복도" MUST appear BEFORE the final dash, never after it: "INT. 건물 계단 - 아침" (✓) vs "INT. 건물 - 계단" (✗).
 15. **LOCATION TRANSITION**: Whenever the story moves from one distinct location to another (e.g., alley → school, point-A → point-B), you MUST include a brief transition beat showing the character LEAVING or ARRIVING. Never cut directly between two very different locations without a bridging line. Example: one action line + one dialogue is sufficient.
 16. **SCENE COMPLETION**: Every scene you start MUST be fully written before moving to the next. Never end a scene mid-action or mid-dialogue. An incomplete final scene is worse than writing one fewer scene.
 17. **RESOLVED CONFLICT RULE**: Once a conflict is explicitly RESOLVED within the episode (a character overcomes a fear, thanks someone for curing a problem, leaves smiling), do NOT reintroduce the SAME conflict again later in the same episode without a clear narrative justification (e.g., a time-skip, a new cause, or a plot twist that makes sense). Repeating a conflict that was already resolved is a story continuity error. Example: if nightmares are cured in scene 16, scene 17 must NOT show the same character waking from the same nightmares.
-18. **UNIQUE DIALOGUE PER SCENE**: Each character's lines must be DISTINCT across all scenes. Do NOT repeat the same supportive phrases like "넌 할 수 있어", "포기하지 마", "내가 옆에 있잖아" more than ONCE per script. If a supporting character encourages the protagonist multiple times, each scene must use a DIFFERENT approach: challenge them with a question, reference a shared past event, use humor, give concrete advice, or stay silent and act. Copying the same "you can do it" template is a dialogue error.
+18. **UNIQUE DIALOGUE PER SCENE**: Each character's lines must be DISTINCT across all scenes in this section AND across the entire script.
+    - Do NOT copy the same spoken sentence verbatim in two different scenes. Even close paraphrases of the same sentiment are forbidden if they already appeared in the [VISUAL BRIDGE] or continuation anchor above.
+    - FORBIDDEN repeated patterns: "넌 할 수 있어", "포기하지 마", "내가 옆에 있잖아", "우리가 있잖아", "고마워, [이름]. 네가 있어서 정말 다행이야", "당연하지. 우리는 [X]잖아."
+    - If a supporting character needs to comfort the protagonist again, use a COMPLETELY DIFFERENT approach: reference a specific shared memory, make a joke, give a concrete task, ask a hard question, or say nothing and act physically instead.
+    - BEFORE writing any dialogue, mentally check: "Did any character say something very similar earlier in this script?" If yes — rewrite the line entirely.
 19. **CONSISTENT GENDER PRONOUNS**: Check the [CHARACTER DB] for each character's gender. Use 그녀/그녀의/그녀를/그녀에게 for female characters and 그/그의/그를/그에게 for male characters CONSISTENTLY across EVERY scene you write. Never switch pronouns for the same character between scenes. If the source prose uses incorrect pronouns for a character, use the [CHARACTER DB] gender as the authoritative source and correct them. Mixing 그 and 그녀 for the same character within a single script section is a CRITICAL ERROR.
 20. **NO DUPLICATE TRANSITION LINES**: When writing consecutive scenes in the same location or continuing an action from the previous scene, do NOT repeat the same action line as both the closing line of one scene and the opening line of the next. Each scene must open with NEW content. Example of FORBIDDEN pattern — S# 4 ends with "강유나, 뒤따라 들어간다." and S# 5 opens with the same "강유나, 뒤따라 들어간다." → delete the duplicate opening line from S# 5 and start S# 5 with the NEXT action.
+21. **SLUG FORMAT — TIME OF DAY MANDATORY**: Every single slugline MUST follow the format: "S# N. INT/EXT. 장소 - 시간대". The time-of-day token (밤/새벽/아침/낮/저녁/이른 아침/늦은 밤) MUST be the final element after the last dash. FORBIDDEN patterns:
+    × "S# N. INT. 장소 - 계속" — write the actual time word again (e.g. "- 아침")
+    × "S# N. INT. 장소 - 계속됨" — same fix
+    × "S# N. INT. 장소 - 계단" — move sub-location before dash: "S# N. INT. 장소 계단 - 시간대"
+    × Missing dash entirely — always include "- 시간대" at the end
+    If a scene takes place in the same time-of-day as the previous scene, just repeat the same time token. Never use "계속" or "이어서" as a time marker.
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
@@ -1269,6 +1297,72 @@ function removeDuplicateSceneTransitions(script: string): string {
         console.log(`>>> [V157 Dup Remove] Total ${removedTotal} duplicate transition line(s) removed across script.`);
     }
     return result.join('');
+}
+
+/**
+ * V162: Fix invalid time-of-day markers in sluglines.
+ * Handles two problems:
+ *   (a) "- 계속" / "- 계속됨" / "- continued" — replace with the last valid time-of-day seen
+ *   (b) Missing time-of-day entirely (e.g. "INT. 천도당 - 계단") — append last valid time
+ * Valid time markers: 낮, 저녁, 밤, 새벽, 아침, 오전, 오후, 이른 아침, 한낮, 한밤, 늦은 밤, 해질녘
+ */
+function fixSlugTimeOfDay(script: string): string {
+    const VALID_TIMES = ['이른 아침', '늦은 밤', '한밤중', '해질녘', '한낮', '이른 저녁', '낮', '저녁', '밤', '새벽', '아침', '오전', '오후'];
+    const INVALID_TIME_RE = /^(계속됨?|continued|cont\.?|이어서)$/i;
+
+    let lastValidTime = '아침'; // sensible fallback
+    let fixed = 0;
+
+    const result = script.replace(
+        /^(S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.\s*(?:INT|EXT|I|E)\.[^\n]+)$/gm,
+        (slugLine) => {
+            // Extract time segment: everything after the last '-'
+            const dashIdx = slugLine.lastIndexOf('-');
+            if (dashIdx === -1) {
+                // No dash at all — append last valid time
+                fixed++;
+                const newSlug = `${slugLine.trimEnd()} - ${lastValidTime}`;
+                console.warn(`>>> [V162 Slug Time Fix] No time-of-day → appended "${lastValidTime}": ${slugLine.trim()}`);
+                return newSlug;
+            }
+
+            const timePart = slugLine.substring(dashIdx + 1).trim();
+
+            // Check if time part is valid
+            const isValid = VALID_TIMES.some(t => timePart.includes(t));
+            if (isValid) {
+                // Update lastValidTime to the matched token
+                const matched = VALID_TIMES.find(t => timePart.includes(t));
+                if (matched) lastValidTime = matched;
+                return slugLine;
+            }
+
+            // Invalid time (계속, 계단 used as time, etc.) — replace with last valid
+            if (INVALID_TIME_RE.test(timePart) || !timePart) {
+                fixed++;
+                const base = slugLine.substring(0, dashIdx).trimEnd();
+                const newSlug = `${base} - ${lastValidTime}`;
+                console.warn(`>>> [V162 Slug Time Fix] Invalid time "${timePart}" → replaced with "${lastValidTime}": ${slugLine.trim()}`);
+                return newSlug;
+            }
+
+            // Looks like a sub-location rather than time (e.g. "계단", "복도") — append time
+            const isSubLoc = /^[가-힣\s]{1,10}$/.test(timePart) && !VALID_TIMES.some(t => timePart.includes(t));
+            if (isSubLoc) {
+                fixed++;
+                const newSlug = `${slugLine.trimEnd()} - ${lastValidTime}`;
+                console.warn(`>>> [V162 Slug Time Fix] Sub-location as time "${timePart}" → appended "${lastValidTime}": ${slugLine.trim()}`);
+                return newSlug;
+            }
+
+            return slugLine;
+        }
+    );
+
+    if (fixed > 0) {
+        console.warn(`>>> [V162 Slug Time Fix] Fixed ${fixed} slug(s) with invalid/missing time-of-day.`);
+    }
+    return result;
 }
 
 /**
