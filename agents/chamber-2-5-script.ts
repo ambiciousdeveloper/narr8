@@ -144,6 +144,22 @@ export class ScriptScribe {
                         continue;
                     }
 
+                    // V143: Expansion Pass — if generated content is < 75% of target, enrich existing scenes
+                    if (content && content.length < sectionLengthTarget * 0.75) {
+                        const shortage = sectionLengthTarget - content.length;
+                        console.warn(`>>> [V143 Expansion Pass] Chunk ${i + 1} too short (${content.length}/${sectionLengthTarget}). Expanding by ~${shortage} chars...`);
+                        const expandPrompt = `You are a professional screenplay writer. The following Korean screenplay excerpt is too short. Expand EACH scene by adding more physical action lines, sensory details, and additional dialogue exchanges. Do NOT summarize or restructure — only add content within each existing scene. Target: add approximately ${shortage} more characters total.\n\nCurrent screenplay:\n${content}\n\nOutput the full expanded screenplay (existing + added content) in the same S# format. Write in Korean only.`;
+                        const expandResult = await model.generateContent({
+                            contents: [{ role: 'user', parts: [{ text: expandPrompt }] }],
+                            generationConfig: { temperature: 0.6, maxOutputTokens: 16000 }
+                        });
+                        const expandedText = expandResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+                        if (expandedText && expandedText.length > content.length) {
+                            console.log(`>>> [V143] Expanded ${content.length} → ${expandedText.length} chars`);
+                            content = scrubMeta(expandedText);
+                        }
+                    }
+
                     if (content) {
                         fullScript += (content + "\n\n");
                         lastChunkHeader = currentHeader;
