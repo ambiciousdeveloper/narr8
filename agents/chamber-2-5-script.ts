@@ -206,7 +206,7 @@ export class ScriptScribe {
 
                     // V143: Expansion Pass — only for non-empty content that is too short or too sparse
                     // Empty content means main generation failed entirely; V143 (expansion) cannot fix that.
-                    if (content && (content.length < sectionLengthTarget * 0.75 || density < 0.20)) {
+                    if (content && (content.length < sectionLengthTarget * 0.90 || density < 0.20)) {
                         const shortage = sectionLengthTarget - content.length;
                         console.warn(`>>> [V143 Expansion Pass] Chunk ${i + 1}: ${content.length}/${sectionLengthTarget} chars, density ${(density * 100).toFixed(1)}%. Expanding...`);
                         const expandPrompt = `You are a professional Korean screenplay writer. The following screenplay is too short AND has too little dialogue. Expand it by adding MORE DIALOGUE EXCHANGES between characters. Target: approximately ${sectionLengthTarget} total characters.
@@ -321,11 +321,13 @@ ${chunk}
                             const scanText = directionLines.join(' ');
                             return DREAM_DETECT_V153.some(kw => scanText.includes(kw));
                         }
-                        const dreamBlocks = chunkBlocks.filter(isDreamSceneBlock);
+                        let dreamBlocks = chunkBlocks.filter(isDreamSceneBlock);
                         if (dreamBlocks.length > 1) {
-                            console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: ${dreamBlocks.length} dream scenes detected (max 1). Requesting consolidation...`);
-                            const dreamSceneNums = dreamBlocks.map(b => b.match(/^S#\s*(\d+[A-Za-z]?)\./m)?.[1] ?? '?').join(', ');
-                            const consolidatePrompt = `아래 한국어 시나리오에 악몽/꿈/수면/침대 관련 씬(S#)이 ${dreamBlocks.length}개 포함되어 있습니다 (S# ${dreamSceneNums}). 최대 1개만 허용됩니다.
+                            // V153: retry loop — up to 2 consolidation attempts
+                            for (let attempt = 1; attempt <= 2 && dreamBlocks.length > 1; attempt++) {
+                                console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: ${dreamBlocks.length} dream scenes detected (max 1). Consolidation attempt ${attempt}/2...`);
+                                const dreamSceneNums = dreamBlocks.map(b => b.match(/^S#\s*(\d+[A-Za-z]?)\./m)?.[1] ?? '?').join(', ');
+                                const consolidatePrompt = `아래 한국어 시나리오에 악몽/꿈/수면/침대 관련 씬(S#)이 ${dreamBlocks.length}개 포함되어 있습니다 (S# ${dreamSceneNums}). 최대 1개만 허용됩니다.
 규칙:
 1. 악몽/수면/침대 씬 중 가장 극적으로 중요한 씬 1개만 남기고 나머지는 완전히 삭제하세요.
 2. 삭제된 씬 번호를 포함하여 모든 S# 번호를 1부터 순서대로 재정렬하세요.
@@ -334,22 +336,28 @@ ${chunk}
 
 대본:
 ${content}`;
-                            try {
-                                const consolidateResult = await model.generateContent({
-                                    contents: [{ role: 'user', parts: [{ text: consolidatePrompt }] }],
-                                    generationConfig: { temperature: 0.1, maxOutputTokens: 16000 }
-                                });
-                                const consolidated = consolidateResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
-                                // Accept if output is >= 60% of original (allows meaningful removal)
-                                if (consolidated && consolidated.length > content.length * 0.6) {
-                                    content = scrubMeta(consolidated);
-                                    const remainingDream = content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim() && isDreamSceneBlock(b)).length;
-                                    console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: consolidated to ${remainingDream} dream scene(s).`);
-                                } else {
-                                    console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: consolidation output too short (${consolidated.length}/${content.length}), skipping.`);
+                                try {
+                                    const consolidateResult = await model.generateContent({
+                                        contents: [{ role: 'user', parts: [{ text: consolidatePrompt }] }],
+                                        generationConfig: { temperature: 0.1, maxOutputTokens: 16000 }
+                                    });
+                                    const consolidated = consolidateResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+                                    // Accept if output is >= 60% of original (allows meaningful removal)
+                                    if (consolidated && consolidated.length > content.length * 0.6) {
+                                        content = scrubMeta(consolidated);
+                                        dreamBlocks = content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim() && isDreamSceneBlock(b));
+                                        console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: attempt ${attempt} → ${dreamBlocks.length} dream scene(s) remaining.`);
+                                    } else {
+                                        console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: attempt ${attempt} output too short (${consolidated.length}/${content.length}), stopping.`);
+                                        break;
+                                    }
+                                } catch (e) {
+                                    console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: attempt ${attempt} error — ${e}.`);
+                                    break;
                                 }
-                            } catch (e) {
-                                console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: consolidation error — ${e}.`);
+                            }
+                            if (dreamBlocks.length > 1) {
+                                console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: ${dreamBlocks.length} dream scene(s) remain after retries.`);
                             }
                         } else {
                             console.log(`>>> [V153 Dream Cap] Chunk ${i + 1}: OK (${dreamBlocks.length} dream scene(s)).`);
@@ -458,6 +466,8 @@ function scrubMeta(text: string): string {
         .replace(/\bdread\b/gi, '공포감')
         .replace(/\bpanic\b/gi, '공황')
         .replace(/\brelief\b/gi, '안도감')
+        // V155: Remove stray English sentences (3+ consecutive English words) that bleed into KO scripts
+        .replace(/^[A-Za-z][A-Za-z\s,.'"-]{15,}$/gm, '')
         .trim();
 }
 
@@ -506,6 +516,10 @@ const INTERNAL_STATE_PATTERNS: RegExp[] = [
     /[^。\n]*희망을\s*동시에[^。\n]*/g,
     /[^。\n]*믿는다\s*$/,
     /[^。\n]*알\s*수\s*있다\s*$/,
+    // 추가 내면묘사 동사
+    /[^。\n]*느껴진다[^。\n]*/g,
+    /[^。\n]*짓누른다[^。\n]*/g,
+    /[^。\n]*감지한\s*듯[^。\n]*/g,
 ];
 function scrubInternalStatements(text: string): string {
     const lines = text.split('\n');
@@ -1009,8 +1023,8 @@ function detectBaseLocationStreak(script: string): number {
  */
 function renumberScenes(script: string): string {
     let counter = 0;
-    // Match S# followed by digits with optional alpha suffix (e.g. 13A, 14B) then a dot
-    return script.replace(/^(S#\s*)\d+[A-Za-z]?(\.\s*)/gm, (_, prefix, suffix) => {
+    // Match S# followed by digits with optional alpha or Korean suffix (e.g. 13A, 14B, 12계단) then a dot
+    return script.replace(/^(S#\s*)\d+[A-Za-z가-힣]?(\.\s*)/gm, (_, prefix, suffix) => {
         counter++;
         return `${prefix}${counter}${suffix}`;
     });
