@@ -328,10 +328,10 @@ ${chunk}
                             console.warn(`>>> [V145 Slug Check] Chunk ${i + 1}: ${slugViolations} location(s) used 3+ times consecutively.`);
                             content = await fixSlugViolations(content, model, i + 1);
                         }
-                        // V149: Base location streak check (5+ scenes in same general area)
+                        // V149: Base location streak check (3+ scenes in same general area)
                         const baseViolations = detectBaseLocationStreak(content);
                         if (baseViolations > 0) {
-                            console.warn(`>>> [V149 Base Slug Check] Chunk ${i + 1}: ${baseViolations} base location(s) used 5+ times consecutively. Running fix...`);
+                            console.warn(`>>> [V149 Base Slug Check] Chunk ${i + 1}: ${baseViolations} base location(s) used ${BASE_STREAK_LIMIT}+ times consecutively. Running fix...`);
                             content = await fixSlugViolations(content, model, i + 1);
                         } else {
                             console.log(`>>> [V149 Base Slug Check] Chunk ${i + 1}: OK.`);
@@ -496,7 +496,7 @@ ${content}`;
         // V149 full-script base location streak check
         const totalBaseViolations = detectBaseLocationStreak(fullScript);
         if (totalBaseViolations > 0) {
-            console.warn(`>>> [V149 Full-Script Base Slug Check] ${totalBaseViolations} base location(s) appear 5+ times consecutively. Running fix...`);
+            console.warn(`>>> [V149 Full-Script Base Slug Check] ${totalBaseViolations} base location(s) appear ${BASE_STREAK_LIMIT}+ times consecutively. Running fix...`);
             fullScript = await fixSlugViolations(fullScript, model, 0);
         } else {
             console.log(`>>> [V149 Full-Script Base Slug Check] OK.`);
@@ -632,6 +632,17 @@ const INTERNAL_STATE_PATTERNS: RegExp[] = [
     /[^。\n]*고독은\s*깊어[^。\n]*/g,
     /[^。\n]*눈빛은\s*[가-힣\s]+으로\s*가득[^。\n]*/g,
     /[^。\n]*두려움에\s*굴복[^。\n]*/g,
+    // V152 추가 — 이번 대본에서 발견된 잔존 내면 서술 패턴
+    /[^。\n]*두려움에\s*사로잡[혀힌][^。\n]*/g,
+    /[^。\n]*공포에\s*사로잡[혀힌][^。\n]*/g,
+    /[^。\n]*힘을\s*제어할\s*수\s*없[^。\n]*/g,
+    /[^。\n]*직감[하한했]다[^。\n]*/g,
+    /[^。\n]*순간이\s*왔음을\s*직감[^。\n]*/g,
+    /[^。\n]*마음이\s*복잡[^。\n]*/g,
+    /[^。\n]*갈피를\s*잡지\s*못[^。\n]*/g,
+    /[^。\n]*믿어야\s*할지.*의심[^。\n]*/g,
+    /[^。\n]*두려움을\s*억누[르른][^。\n]*/g,
+    /[^。\n]*이끌림[을에][^。\n]*/g,
 ];
 function scrubInternalStatements(text: string): string {
     const lines = text.split('\n');
@@ -818,10 +829,11 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
     **NIGHTMARE CYCLE TOTAL LIMIT**: The ENTIRE script (all sections combined) may contain at most 2 sleep/nightmare/waking scenes. If your beats list multiple nightmare occurrences, select only the MOST DRAMATICALLY IMPORTANT ONE and skip the rest.
 12. **MULTI-CHARACTER SCENES**: Whenever the story beats involve 2+ characters, scenes MUST feature dialogue exchanges between them — not solo monologue. A character talking only to themselves when other characters are present is an error.
 13. **SOLO SCENE RULE**: When a character is genuinely alone:
-    (a) Limit spoken self-talk to MAXIMUM 2 short lines per scene.
+    (a) Limit spoken self-talk to MAXIMUM **1 dialogue block** (one line or two lines at most) per solo scene. A character talking to themselves in multiple separate speech turns (two NAME: … blocks in one scene) is FORBIDDEN.
     (b) Fill the scene with: physical actions (문을 박찬다, 주먹을 쥔다, 사진을 뒤집는다), ambient sounds (발소리, 빗소리, 전화벨), environmental changes (바람이 창문을 흔든다, 가로등이 깜박인다).
-    (c) Inner reflection MUST be expressed through a PHYSICAL OBJECT or ACTION — never as a spoken thought. BAD: "내가 왜 이렇게 됐지?" → GOOD: character picks up a photo, stares at it, then puts it face-down.
+    (c) Inner reflection MUST be expressed through a PHYSICAL OBJECT or ACTION — never as a spoken thought. BAD: "내가 왜 이렇게 됐지?" / "젠장, 이놈의 우울은 끝이 없나." → GOOD: character picks up a photo, stares at it, then puts it face-down.
     (d) After MAXIMUM 3 consecutive scenes with the same character alone, you MUST introduce another character (even briefly — a knock, a call, a passer-by).
+    (e) A scene where a character walks alone and ONLY delivers self-talk monologues (no meaningful action, no other person) does NOT deserve its own scene number. Merge it into the next or previous scene instead.
 14. **LOCATION VARIETY**:
     (a) EXACT SLUGLINE: Do NOT write more than 2 consecutive scenes with the EXACT same slugline (same place AND same time of day). Two scenes with identical sluglines back-to-back is a formatting error.
     (b) GENERAL AREA: Do NOT write more than **3** consecutive scenes in the same GENERAL AREA (same building, same street, same zone), even with different sub-location suffixes (입구/중앙/안쪽/부엌/방 한가운데/세면대 etc.). Example: "INT. 낡은 방" appearing 3 scenes in a row (방 한가운데, 세면대 앞, 문 앞) is a VIOLATION — move the character outside or to a completely different building after 2 sub-scenes.
@@ -837,12 +849,12 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
     - BEFORE writing any dialogue, mentally check: "Did any character say something very similar earlier in this script?" If yes — rewrite the line entirely.
 19. **CONSISTENT GENDER PRONOUNS**: Check the [CHARACTER DB] for each character's gender. Use 그녀/그녀의/그녀를/그녀에게 for female characters and 그/그의/그를/그에게 for male characters CONSISTENTLY across EVERY scene you write. Never switch pronouns for the same character between scenes. If the source prose uses incorrect pronouns for a character, use the [CHARACTER DB] gender as the authoritative source and correct them. Mixing 그 and 그녀 for the same character within a single script section is a CRITICAL ERROR.
 20. **NO DUPLICATE TRANSITION LINES**: When writing consecutive scenes in the same location or continuing an action from the previous scene, do NOT repeat the same action line as both the closing line of one scene and the opening line of the next. Each scene must open with NEW content. Example of FORBIDDEN pattern — S# 4 ends with "강유나, 뒤따라 들어간다." and S# 5 opens with the same "강유나, 뒤따라 들어간다." → delete the duplicate opening line from S# 5 and start S# 5 with the NEXT action.
-21. **SLUG FORMAT — TIME OF DAY MANDATORY**: Every single slugline MUST follow the format: "S# N. INT/EXT. 장소 - 시간대". The time-of-day token (밤/새벽/아침/낮/저녁/이른 아침/늦은 밤) MUST be the final element after the last dash. FORBIDDEN patterns:
-    × "S# N. INT. 장소 - 계속" — write the actual time word again (e.g. "- 아침")
-    × "S# N. INT. 장소 - 계속됨" — same fix
-    × "S# N. INT. 장소 - 계단" — move sub-location before dash: "S# N. INT. 장소 계단 - 시간대"
-    × Missing dash entirely — always include "- 시간대" at the end
-    If a scene takes place in the same time-of-day as the previous scene, just repeat the same time token. Never use "계속" or "이어서" as a time marker.
+21. **SLUG FORMAT — TIME OF DAY MANDATORY**: Every single slugline MUST follow the format: "S# N. INT/EXT. 장소명 [선택: 서브위치] - 시간대". Rules:
+    × Time-of-day token (밤/새벽/아침/낮/저녁/이른 아침/늦은 밤) MUST be the LAST element after the final dash.
+    × FORBIDDEN time markers: "계속", "계속됨", "이어서", "cont." — repeat the actual time word instead.
+    × Sub-location (계단, 복도, 계단, 거울 앞 etc.) MUST appear BEFORE the dash: "INT. 건물 계단 - 아침" (✓) NOT "INT. 건물 - 계단" (✗).
+    × FORBIDDEN action words as sub-location: "전투", "결투", "격전", "추격", "전장" — these are EVENTS not places. Describe the event in the ACTION LINE instead. Use the physical place: "EXT. 서울 뒷골목 - 저녁" (✓) NOT "EXT. 서울 뒷골목 전투 - 저녁" (✗).
+    × A BATTLE or CHASE in the same general area must NOT get a new sub-location slug for every exchange. Write the entire fight under ONE slug, and use action lines to show movement within that space.
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
@@ -1196,13 +1208,19 @@ function detectConsecutiveSlugs(script: string): number {
  * V149: Extracts the BASE location name, stripping sub-location suffixes added by V147.
  * Example: "EXT. 낡은 골목길 초입 - 새벽" → "EXT. 낡은 골목길 - 새벽"
  */
-const BASE_LOC_SUFFIXES = /\s+(입구|중앙|안쪽|한쪽|끝|구석|옆길|뒤쪽|정문\s*앞|창가|복도|계단|세면대\s*앞|문\s*앞|초입|막다른\s*길|부상|연기\s*속|책상\s*앞|가로등\s*아래|담벼락\s*앞|담벼락|골목\s*안쪽|골목\s*입구|골목\s*끝|침대\s*옆|침대\s*앞|냉장고\s*앞|현관\s*앞|현관|명상\s*중|창문\s*앞|바닥|지하|2층|3층|옥상|뒷골목|골목\s*어귀)(?=\s*-)/u;
+// V149 BASE_LOC_SUFFIXES: strips sub-location tokens appearing BEFORE the "- 시간대" dash.
+// CRITICAL: Do NOT include actual location names (뒷골목, 골목, 거리 are PLACES not suffixes).
+// Only list words that describe a sub-area WITHIN a larger named location.
+const BASE_LOC_SUFFIXES = /\s+(입구|출구|중앙|중간|한가운데|안쪽|한쪽|끝|구석|옆길|뒤쪽|정문\s*앞|창가|복도|계단|세면대\s*앞|문\s*앞|초입|막다른\s*길|연기\s*속|책상\s*앞|가로등\s*아래|담벼락\s*앞|담벼락|침대\s*옆|침대\s*앞|냉장고\s*앞|현관\s*앞|현관|명상\s*중|창문\s*앞|바닥|지하|2층|3층|옥상|골목\s*안쪽|골목\s*입구|골목\s*끝|골목\s*어귀|어귀|한복판|전투|결투|격전지|추격|거울\s*앞)(?=\s*-)/u;
 function extractBaseLocation(rawSlug: string): string {
     return extractSlugKey(rawSlug).replace(BASE_LOC_SUFFIXES, '').trim();
 }
 
+// V149: threshold lowered 5→3 to match Rule 14b (max 3 consecutive general-area scenes).
+const BASE_STREAK_LIMIT = 3;
+
 /**
- * V149: Detects how many distinct BASE locations appear 5+ times consecutively.
+ * V149: Detects how many distinct BASE locations appear BASE_STREAK_LIMIT+ times consecutively.
  * Catches battles/chases where V147 sub-location splits fool V145.
  */
 function detectBaseLocationStreak(script: string): number {
@@ -1213,7 +1231,7 @@ function detectBaseLocationStreak(script: string): number {
     for (let j = 1; j < bases.length; j++) {
         if (bases[j] === bases[j - 1]) {
             streak++;
-            if (streak === 5) violations++;
+            if (streak === BASE_STREAK_LIMIT + 1) violations++;
         } else {
             streak = 1;
         }
