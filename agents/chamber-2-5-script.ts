@@ -248,11 +248,12 @@ ${chunk}
                     }
                     console.log(`>>> [V141] Chunk ${i + 1} FINAL dialogue density: ${(getDialogueDensity(content) * 100).toFixed(1)}%`);
 
-                    // V145: Consecutive slugline violation check
+                    // V145: Consecutive slugline violation check + V147 auto-fix
                     if (content) {
                         const slugViolations = detectConsecutiveSlugs(content);
                         if (slugViolations > 0) {
                             console.warn(`>>> [V145 Slug Check] Chunk ${i + 1}: ${slugViolations} location(s) used 3+ times consecutively.`);
+                            content = await fixSlugViolations(content, model, i + 1);
                         }
                     }
 
@@ -635,6 +636,42 @@ function extractSlugKey(rawSlug: string): string {
     // Match up to and including the time indicator (밤/낮/새벽/아침/오후/저녁/황혼/심야 etc.)
     const m = body.match(/^(?:INT|EXT)\..+?-\s*(?:밤|낮|새벽|이른\s*아침|아침|오후|저녁|황혼|심야|한낮|정오)/);
     return m ? m[0].trim() : body.split(/\s{2,}/)[0].trim();
+}
+
+/**
+ * V147: When V145 finds 3+ consecutive slugline violations in a chunk,
+ * runs a targeted slugline-only correction pass. Content is never altered.
+ */
+async function fixSlugViolations(script: string, model: any, chunkNum: number): Promise<string> {
+    const fixPrompt = `아래 한국어 대본에서 동일한 씬 헤더(S# N. 장소 - 시간대)가 3번 이상 연속으로 반복됩니다.
+연속된 씬 헤더 중 일부를 씬 내용에 어울리는 더 구체적인 하위 장소로 수정하세요.
+
+규칙:
+1. S# 번호는 절대 변경하지 마세요.
+2. 씬 헤더(S# N. 부분)만 수정. 액션/대사 내용은 절대 변경 금지.
+3. 수정된 헤더는 씬 내용(해당 씬에서 실제 일어나는 일)과 일치해야 합니다.
+   예) 천도당 앞에 서는 장면 → EXT. 천도당 앞 - 밤
+   예) 골목 끝에서 싸우는 장면 → EXT. 서울 골목 끝 - 새벽
+4. 한국어로만 작성. 수정된 대본 전체를 그대로 출력하세요.
+
+대본:
+${script}`;
+
+    try {
+        const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: fixPrompt }] }],
+            generationConfig: { temperature: 0.3, maxOutputTokens: 10000 }
+        });
+        const fixed = result.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+        if (fixed && fixed.length > script.length * 0.7) {
+            const remaining = detectConsecutiveSlugs(fixed);
+            console.warn(`>>> [V147 Slug Fix] Chunk ${chunkNum}: violations fixed. Remaining: ${remaining}`);
+            return fixed;
+        }
+    } catch (e) {
+        console.warn(`>>> [V147 Slug Fix] Chunk ${chunkNum}: Error — ${e}.`);
+    }
+    return script;
 }
 
 /**
