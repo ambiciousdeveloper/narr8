@@ -91,7 +91,7 @@ export class ScriptScribe {
             if (!chunk && i > 0) break;
 
             let retryCount = 0;
-            let currentTemp = 0.5;
+            let currentTemp = 0.7;
             let dialogueRetry = false;
 
             while (retryCount < 3) {
@@ -329,14 +329,19 @@ DO NOT submit another response without spoken dialogue.
 Professional Script Adaptor.
 Convert PROSE into a high-density, visual SCREENPLAY in **${langLabel}** ONLY.
 ${dialogueAlert}${personaBlock}
-[GOLDEN FORMAT SAMPLE]
+[GOLDEN FORMAT SAMPLE — 2-character exchange (this is the standard)]
 S# 10. INT. 낡은 무도장 - 밤
-먼지 쌓인 매트리스 위로 달빛이 세상을 비춘다.
-강태준, 가죽 장갑을 탁자 위로 던진다. 툭, 하는 둔탁한 소리.
-그가 심호흡을 하자 차가운 공기가 하얀 입김이 되어 흩어진다.
+먼지 쌓인 매트리스 위로 달빛이 스며든다.
+강태준, 가죽 장갑을 탁자 위로 던진다. 툭, 둔탁한 소리.
+문이 삐걱거리며 열린다. 이서아가 들어선다. 그녀의 눈이 바닥에 놓인 장갑을 포착한다.
+이서아
+또 시작하려고요?
 강태준
-...결국, 다시 시작인 건가.
-경직된 턱 근육이 대변하듯 그는 룬 문자를 뚫어져라 응시한다.
+...네 알 바 아니다.
+이서아, 장갑을 집어 그에게 내민다. 그는 받지 않는다.
+이서아
+혼자서는 감당 못 해요. 그거 알잖아요.
+강태준은 등을 돌린다. 하지만 손이 장갑 쪽으로 천천히 움직인다.
 
 [TARGET VOLUME]
 This section MUST reach **${p.targetChars} characters** total. Write exactly ${targetScenes} scenes: S# ${nextNum} through S# ${stopAtScene}.
@@ -358,6 +363,9 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 김해리
 여기서 뭘 하는 거요?
 10. **INVENT DIALOGUE**: Screenwriters CREATE dialogue. Even when adapting prose with no dialogue, you MUST give characters voices. Invent lines that reveal character, advance plot, or react to the situation.
+11. **NO REPETITION**: Every scene MUST advance the story forward. If a scene does not change the situation, location, or character state compared to the previous scene — DO NOT write it. Merge or skip it. Writing the same hesitation or action twice in two consecutive scenes is a CRITICAL ERROR.
+12. **MULTI-CHARACTER SCENES**: Whenever the story beats involve 2+ characters, scenes MUST feature dialogue exchanges between them — not solo monologue. A character talking only to themselves when other characters are present is an error.
+13. **SOLO MONOLOGUE LIMIT**: If a character is genuinely alone, limit self-talk to 2 lines per scene. Fill remaining dialogue requirement with physical actions, ambient sounds, or reactive behaviour.
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
