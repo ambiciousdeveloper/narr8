@@ -56,7 +56,8 @@ export class ScriptScribe {
         const totalTargetChars = Math.max(1500, targetLength * Number(scriptDensity) * ratio * Number(globalDensity));
 
         // 2. [V81 Paragraph-Aware Sectioning]
-        const beats = originalPlot.split(/Beat\s*#?\d+:?|비트\s*#?\d+:?|\n\n/gi).filter(b => b.trim().length > 20);
+        // \n 단위로 분할해 beats.length를 늘림 → actualSections이 beats.length에 막히지 않도록
+        const beats = originalPlot.split(/Beat\s*#?\d+:?|비트\s*#?\d+:?|\n/gi).filter(b => b.trim().length > 30);
         const novelParagraphs = refText.split(/\n\n+/).filter(p => p.trim().length > 0);
 
         const idealSections = Math.ceil(totalTargetChars / Number(sectionLimit));
@@ -113,7 +114,7 @@ export class ScriptScribe {
 
                 const result = await model.generateContent({
                     contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                    generationConfig: { temperature: currentTemp, maxOutputTokens: 10000 }
+                    generationConfig: { temperature: currentTemp, maxOutputTokens: 24000 }
                 });
 
                 lastRawResponse = result.response.text();
