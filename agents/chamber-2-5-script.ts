@@ -177,18 +177,37 @@ Output the full expanded screenplay in Korean S# format.`;
                             content = scrubMeta(expandedText);
                         }
                     } else if (!content) {
-                        console.warn(`>>> [V143 Skip] Chunk ${i + 1} has no content. Main generation failed — skipping expansion.`);
-                        // V144: Raw Extract — model may have written screenplay outside the JSON wrapper
-                        const rawLines = lastRawResponse.split('\n').filter(l =>
-                            (l.includes('S#') || /^[가-힣]{2,6}$/.test(l.trim()) || l.length > 30) &&
-                            !l.includes('"content"') && !l.includes('"title"') && !l.includes('"characters"') &&
-                            !l.startsWith('{') && !l.startsWith('}') && !l.startsWith('[') && !l.startsWith(']')
-                        );
-                        if (rawLines.length > 5) {
-                            content = scrubMeta(rawLines.join('\n'));
-                            console.warn(`>>> [V144 Raw Extract] Chunk ${i + 1}: Recovered ${content.length} chars from raw response.`);
-                        } else {
-                            console.warn(`>>> [V144 Raw Extract] Chunk ${i + 1}: Raw response also empty (${lastRawResponse.length} chars). Chunk skipped.`);
+                        console.warn(`>>> [V143 Skip] Chunk ${i + 1}: no content after retries. Running V144 mini-generation...`);
+                        // V144: Mini-Generation — clean pass from beats only, no JSON wrapper required
+                        const miniSceneCount = Math.max(2, Math.min(5, Math.ceil(sectionLengthTarget / 400)));
+                        const miniPrompt = `당신은 전문 한국어 시나리오 작가입니다.
+아래 스토리 비트를 바탕으로 S# ${contextState.lastSceneNumber + 1}부터 시작하는 시나리오 ${miniSceneCount}개 씬을 작성하세요.
+
+[스토리 비트]
+${chunk}
+
+[필수 규칙]
+1. 형식: S# N. INT/EXT. 장소 - 시간대
+2. 모든 씬에 반드시 대사 포함 (캐릭터명 단독 한 줄 → 대사 다음 줄)
+3. 지문은 카메라로 촬영 가능한 것만 (내면 심리 금지)
+4. 한국어로만 작성
+5. JSON 래퍼 없이 시나리오 텍스트만 출력
+
+시나리오:`;
+                        try {
+                            const miniResult = await model.generateContent({
+                                contents: [{ role: 'user', parts: [{ text: miniPrompt }] }],
+                                generationConfig: { temperature: 0.75, maxOutputTokens: 8000 }
+                            });
+                            const miniText = miniResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+                            if (miniText && miniText.length > 100) {
+                                content = scrubMeta(miniText);
+                                console.warn(`>>> [V144 Mini-Gen] Chunk ${i + 1}: Generated ${content.length} chars.`);
+                            } else {
+                                console.warn(`>>> [V144 Mini-Gen] Chunk ${i + 1}: Mini-generation empty. Chunk skipped.`);
+                            }
+                        } catch (e) {
+                            console.warn(`>>> [V144 Mini-Gen] Chunk ${i + 1}: Error — ${e}. Chunk skipped.`);
                         }
                     }
 
@@ -284,8 +303,10 @@ function buildUnifiedPrompt(p: any): string {
     const guidelinesBlock = p.sopGuidelines ? `[ADDITIONAL GUIDELINES]\n${p.sopGuidelines}\n` : '';
 
     // 씬당 평균 글자 수: system_config SCRIPT_SCENE_AVG_CHARS 에서 fetch한 값 사용
-    const avgCharsPerScene = p.sceneAvgChars || 200;
-    const targetScenes = Math.max(3, Math.ceil((p.targetChars || 1500) / avgCharsPerScene));
+    const avgCharsPerScene = p.sceneAvgChars || 300;
+    // Cap per-section scene count: too many short scenes causes beat exhaustion in chunk 1
+    const targetScenes = Math.max(3, Math.min(6, Math.ceil((p.targetChars || 1500) / avgCharsPerScene)));
+    const stopAtScene = nextNum + targetScenes - 1;
 
     const dialogueAlert = p.dialogueRetry ? `
 🚨 DIALOGUE FAILURE ALERT 🚨
@@ -318,10 +339,11 @@ S# 10. INT. 낡은 무도장 - 밤
 경직된 턱 근육이 대변하듯 그는 룬 문자를 뚫어져라 응시한다.
 
 [TARGET VOLUME]
-This section MUST reach **${p.targetChars} characters** total (approximately ${targetScenes} scenes).
+This section MUST reach **${p.targetChars} characters** total. Write exactly ${targetScenes} scenes: S# ${nextNum} through S# ${stopAtScene}.
+- HARD STOP: Do NOT write S# ${stopAtScene + 1} or beyond. Stop exactly at S# ${stopAtScene}.
 - Each scene MUST have at least 4 action lines + 2 dialogue exchanges. One-liner scenes are INVALID.
-- Do NOT stop early. Keep writing until you have filled the full ${p.targetChars} character target.
-- If you run out of beats, EXPAND each scene with more physical detail, reaction shots, and dialogue.
+- Expand each scene with physical detail, reaction shots, and dialogue to fill the target length.
+- COVER ONLY the story beats listed in [STORY BEATS]. Do NOT advance to events not in those beats.
 
 [MANDATORY RULES]
 1. **SCENE NUMBERING**: You MUST start the content with "S# ${nextNum}.". Use format "S# N. [PLACE] - [TIME]".
