@@ -135,19 +135,23 @@ export class ScriptScribe {
                         continue;
                     }
 
-                    // V141: Dialogue Enforcement - Reject silent scripts and retry with modified prompt
-                    if (content && !hasDialogue(content) && retryCount < 2) {
-                        console.warn(`>>> [V141 Dialogue Enforcer] No dialogue detected in chunk ${i + 1}. Retrying with dialogue injection prompt...`);
+                    // V141: Dialogue Density Enforcement — retry if dialogue ratio < 20%
+                    const density = content ? getDialogueDensity(content) : 0;
+                    if (content && density < 0.20 && retryCount < 2) {
+                        console.warn(`>>> [V141 Dialogue Density] Chunk ${i + 1} density too low (${(density * 100).toFixed(1)}%). Retrying with dialogue injection prompt...`);
                         currentTemp = Math.min(0.9, currentTemp + 0.2);
                         dialogueRetry = true;
                         retryCount++;
                         continue;
                     }
+                    console.log(`>>> [V141] Chunk ${i + 1} dialogue density: ${(density * 100).toFixed(1)}%`);
 
-                    // V143: Expansion Pass — if generated content is < 75% of target, enrich existing scenes
-                    if (content && content.length < sectionLengthTarget * 0.75) {
-                        const shortage = sectionLengthTarget - content.length;
-                        console.warn(`>>> [V143 Expansion Pass] Chunk ${i + 1} too short (${content.length}/${sectionLengthTarget}). Expanding by ~${shortage} chars...`);
+                    // V143: Expansion Pass — if content < 75% of target OR dialogue density < 20%
+                    const postDensity = content ? getDialogueDensity(content) : 0;
+                    const needsExpansion = content && (content.length < sectionLengthTarget * 0.75 || postDensity < 0.20);
+                    if (needsExpansion) {
+                        const shortage = Math.max(0, sectionLengthTarget - content.length);
+                        console.warn(`>>> [V143 Expansion Pass] Chunk ${i + 1}: ${content.length}/${sectionLengthTarget} chars, density ${(postDensity * 100).toFixed(1)}%. Expanding...`);
                         const expandPrompt = `You are a professional Korean screenplay writer. The following screenplay is too short AND has too little dialogue. Your job is to expand it by adding MORE DIALOGUE EXCHANGES between characters.
 
 RULES:
@@ -299,12 +303,12 @@ This section MUST reach **${p.targetChars} characters** total (approximately ${t
 [MANDATORY RULES]
 1. **SCENE NUMBERING**: You MUST start the content with "S# ${nextNum}.". Use format "S# N. [PLACE] - [TIME]".
 2. **HIGH DENSITY**: Merge multiple paragraphs into one dense S# sequence. NO "S1", "S2" shortcuts.
-3. **ZERO PROSE LEAK**: NEVER write "그의 눈빛은", "그는 마치", "그의 마음속", "그의 내면", "그는 느꼈다", "그는 생각했다", "그는 결심했다", or any internal-state narration. Camera cannot film thoughts. Only pixel-level physical actions visible to the camera.
+3. **ZERO PROSE LEAK**: Action lines describe ONLY what a camera physically records — movement, sound, touch, visible expression. If a line cannot be filmed (emotion, thought, intention, attitude), DELETE it and replace it with spoken dialogue or a physical action.
 4. **DIALOGUE PURITY**: No "(혼잣말)", "(침묵)". Action lines for silence.
 5. **DIALOGUE MANDATORY**: Every scene MUST contain at least ONE spoken dialogue line. Characters MUST speak. A scene with ZERO dialogue lines is INVALID and will be rejected. OUTPUT WITH NO DIALOGUE WILL BE DISCARDED. IF THE SOURCE HAS NO DIALOGUE, YOU MUST INVENT APPROPRIATE DIALOGUE — DO NOT use the absence of dialogue in the source as an excuse to omit it.
 6. **NO CONSECUTIVE SILENT SCENES**: You MUST NOT write 3 or more consecutive scenes without dialogue. Insert spoken lines to break any silent streak.
 7. **DIALOGUE DENSITY**: At least 30% of all lines in the output must be character dialogue lines (character name on its own line followed by spoken text).
-8. **ANTI-NARRATION**: Scenes driven PRIMARILY BY DIALOGUE. Action lines set up the next line of dialogue — they do NOT replace it. A scene with 10 action lines and 1 dialogue line is a FAILURE. Target: at least 1 dialogue exchange per every 3 action lines.
+8. **3:1 RULE**: After every 3 action lines, you MUST write a dialogue exchange (character name + spoken line). This is a hard structural constraint. A "block" of more than 3 consecutive action lines with no dialogue is a formatting error that will be rejected.
 9. **DIALOGUE FORMAT**: Write the character name alone on one line, then the spoken line below it. Example:
 김해리
 여기서 뭘 하는 거요?
@@ -390,6 +394,30 @@ function hasDialogue(content: string): boolean {
         }
     }
     return false;
+}
+
+/**
+ * Measures the ratio of dialogue lines to total non-empty, non-slugline lines.
+ * A "dialogue line" is the spoken text immediately following a character name line.
+ * Returns a value between 0.0 and 1.0.
+ */
+function getDialogueDensity(content: string): number {
+    const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+    let dialogueLines = 0;
+    let totalLines = 0;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith('S#')) continue; // skip sluglines
+        totalLines++;
+        const isKoreanName = /^[가-힣]{2,6}$/.test(line) && !EXCLUDED_WORDS.has(line) && !line.includes('.');
+        const isEnglishName = /^[A-Z][A-Z\s]{1,24}$/.test(line);
+        if ((isKoreanName || isEnglishName) && i + 1 < lines.length && !lines[i + 1].startsWith('S#') && lines[i + 1].length > 4) {
+            dialogueLines += 2; // name line + spoken line
+            i++; // skip the spoken line
+        }
+    }
+    if (totalLines === 0) return 0;
+    return dialogueLines / totalLines;
 }
 
 /**
