@@ -148,7 +148,20 @@ export class ScriptScribe {
                     if (content && content.length < sectionLengthTarget * 0.75) {
                         const shortage = sectionLengthTarget - content.length;
                         console.warn(`>>> [V143 Expansion Pass] Chunk ${i + 1} too short (${content.length}/${sectionLengthTarget}). Expanding by ~${shortage} chars...`);
-                        const expandPrompt = `You are a professional screenplay writer. The following Korean screenplay excerpt is too short. Expand EACH scene by adding more physical action lines, sensory details, and additional dialogue exchanges. Do NOT summarize or restructure — only add content within each existing scene. Target: add approximately ${shortage} more characters total.\n\nCurrent screenplay:\n${content}\n\nOutput the full expanded screenplay (existing + added content) in the same S# format. Write in Korean only.`;
+                        const expandPrompt = `You are a professional Korean screenplay writer. The following screenplay is too short AND has too little dialogue. Your job is to expand it by adding MORE DIALOGUE EXCHANGES between characters.
+
+RULES:
+1. Add 2-4 new spoken dialogue lines per scene (character name on its own line, then spoken text below).
+2. Characters must REACT TO EACH OTHER. If only one character is present, they speak aloud more — to themselves, to the environment, to unseen forces.
+3. Do NOT add internal state descriptions ("그의 눈빛은...", "그는 마치...", "그의 마음속에..."). These are FORBIDDEN.
+4. Do NOT add atmosphere/environment descriptions. Only physical action + dialogue.
+5. Keep existing scene sluglines (S# N. ...) intact.
+6. Add approximately ${shortage} more characters, primarily through dialogue.
+
+Current screenplay:
+${content}
+
+Output the full expanded screenplay in the same S# format. Korean only.`;
                         const expandResult = await model.generateContent({
                             contents: [{ role: 'user', parts: [{ text: expandPrompt }] }],
                             generationConfig: { temperature: 0.6, maxOutputTokens: 16000 }
@@ -286,12 +299,12 @@ This section MUST reach **${p.targetChars} characters** total (approximately ${t
 [MANDATORY RULES]
 1. **SCENE NUMBERING**: You MUST start the content with "S# ${nextNum}.". Use format "S# N. [PLACE] - [TIME]".
 2. **HIGH DENSITY**: Merge multiple paragraphs into one dense S# sequence. NO "S1", "S2" shortcuts.
-3. **ZERO PROSE LEAK**: No "feels", "thinks", "decides". Only pixel-level physical actions.
+3. **ZERO PROSE LEAK**: NEVER write "그의 눈빛은", "그는 마치", "그의 마음속", "그의 내면", "그는 느꼈다", "그는 생각했다", "그는 결심했다", or any internal-state narration. Camera cannot film thoughts. Only pixel-level physical actions visible to the camera.
 4. **DIALOGUE PURITY**: No "(혼잣말)", "(침묵)". Action lines for silence.
 5. **DIALOGUE MANDATORY**: Every scene MUST contain at least ONE spoken dialogue line. Characters MUST speak. A scene with ZERO dialogue lines is INVALID and will be rejected. OUTPUT WITH NO DIALOGUE WILL BE DISCARDED. IF THE SOURCE HAS NO DIALOGUE, YOU MUST INVENT APPROPRIATE DIALOGUE — DO NOT use the absence of dialogue in the source as an excuse to omit it.
 6. **NO CONSECUTIVE SILENT SCENES**: You MUST NOT write 3 or more consecutive scenes without dialogue. Insert spoken lines to break any silent streak.
 7. **DIALOGUE DENSITY**: At least 30% of all lines in the output must be character dialogue lines (character name on its own line followed by spoken text).
-8. **ANTI-NARRATION**: Do NOT write scenes that only describe environment, atmosphere, or internal state. Every scene must advance through CHARACTER SPEECH AND ACTION together.
+8. **ANTI-NARRATION**: Scenes driven PRIMARILY BY DIALOGUE. Action lines set up the next line of dialogue — they do NOT replace it. A scene with 10 action lines and 1 dialogue line is a FAILURE. Target: at least 1 dialogue exchange per every 3 action lines.
 9. **DIALOGUE FORMAT**: Write the character name alone on one line, then the spoken line below it. Example:
 김해리
 여기서 뭘 하는 거요?
