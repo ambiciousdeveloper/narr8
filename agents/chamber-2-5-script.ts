@@ -481,6 +481,9 @@ ${content}`;
         // V162: Fix invalid/missing time-of-day in sluglines (계속, 계단-as-time, no dash)
         fullScript = fixSlugTimeOfDay(fullScript);
 
+        // V163: Strip action/event words from slugline sub-location tokens (깨어남, 대치, 몸싸움 etc.)
+        fullScript = stripActionWordsFromSlugs(fullScript);
+
         // V152: Final internal-state scrub on assembled script
         fullScript = scrubInternalStatements(fullScript);
 
@@ -500,6 +503,37 @@ ${content}`;
             fullScript = await fixSlugViolations(fullScript, model, 0);
         } else {
             console.log(`>>> [V149 Full-Script Base Slug Check] OK.`);
+        }
+
+        // V153 Full-Script Dream Total Cap: max 2 dream/nightmare scenes across the entire script.
+        // Per-chunk cap (max 1 per chunk) already ran; this catches the case where each chunk
+        // passes individually but the assembled script has too many (e.g. 4 chunks × 1 = 4 dream scenes).
+        {
+            const DREAM_DETECT_FULL = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자리', '침대', '누워'];
+            const FULL_DREAM_MAX = 2;
+            const allBlocks = fullScript.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim());
+            const isDream = (block: string) => {
+                const lines = block.split('\n');
+                const slugLine = lines[0] ?? '';
+                // Slug fast-path: slugline ending in - 꿈
+                if (/[-–]\s*꿈\s*$/.test(slugLine)) return true;
+                // Scan first 4 stage-direction lines (skip dialogue)
+                const dirLines = lines.slice(1).filter(l => l.trim() && !/^[가-힣A-Za-z\s]+\s/.test(l.trim()) || l.trim().length < 30).slice(0, 4);
+                return DREAM_DETECT_FULL.some(kw => (slugLine + ' ' + dirLines.join(' ')).includes(kw));
+            };
+            const dreamBlocks = allBlocks.filter(isDream);
+            if (dreamBlocks.length > FULL_DREAM_MAX) {
+                console.warn(`>>> [V153 Full-Script Dream Cap] ${dreamBlocks.length} dream scene(s) in assembled script (max ${FULL_DREAM_MAX}). Removing extras programmatically...`);
+                // Sort by length (keep longest), remove shortest extras beyond limit
+                const sorted = [...dreamBlocks].sort((a, b) => b.length - a.length);
+                const toRemove = new Set(sorted.slice(FULL_DREAM_MAX).map(b => b.trim()));
+                let patched = allBlocks.filter(b => !toRemove.has(b.trim())).join('');
+                patched = renumberScenes(patched);
+                fullScript = patched;
+                console.warn(`>>> [V153 Full-Script Dream Cap] Removed ${dreamBlocks.length - FULL_DREAM_MAX} excess dream scene(s). Renumbered.`);
+            } else {
+                console.log(`>>> [V153 Full-Script Dream Cap] OK (${dreamBlocks.length}/${FULL_DREAM_MAX} dream scene(s)).`);
+            }
         }
 
         return {
@@ -643,6 +677,18 @@ const INTERNAL_STATE_PATTERNS: RegExp[] = [
     /[^。\n]*믿어야\s*할지.*의심[^。\n]*/g,
     /[^。\n]*두려움을\s*억누[르른][^。\n]*/g,
     /[^。\n]*이끌림[을에][^。\n]*/g,
+    // V152 추가 — 이번 대본에서 발견된 인지·고민·감각 내면 서술
+    /[^。\n]*어떻게\s*다뤄야\s*할지\s*고민[^。\n]*/g,
+    /[^。\n]*[이가]\s*고민[한하]다[^。\n]*/g,
+    /[^。\n]*[을를]\s*생각한다[^。\n]*/g,
+    /[^。\n]*모른다고\s*생각[^。\n]*/g,
+    /[^。\n]*것이라고\s*생각[^。\n]*/g,
+    /[^。\n]*지도\s*모른다고[^。\n]*/g,
+    /[^。\n]*짓누르는\s*[가-힣]+\s*기운[^。\n]*/g,
+    /[^。\n]*온몸이\s*굳[어었][^。\n]*/g,
+    /[^。\n]*[이가]\s*멈[춰춰]버린\s*듯[^。\n]*/g,
+    /[^。\n]*마지막\s*힘을\s*짜[내냈][^。\n]*/g,
+    /[^。\n]*자책하[지지]\s*마[^。\n]*/g,
 ];
 function scrubInternalStatements(text: string): string {
     const lines = text.split('\n');
@@ -1211,7 +1257,7 @@ function detectConsecutiveSlugs(script: string): number {
 // V149 BASE_LOC_SUFFIXES: strips sub-location tokens appearing BEFORE the "- 시간대" dash.
 // CRITICAL: Do NOT include actual location names (뒷골목, 골목, 거리 are PLACES not suffixes).
 // Only list words that describe a sub-area WITHIN a larger named location.
-const BASE_LOC_SUFFIXES = /\s+(입구|출구|중앙|중간|한가운데|안쪽|한쪽|끝|구석|옆길|뒤쪽|정문\s*앞|창가|복도|계단|세면대\s*앞|문\s*앞|초입|막다른\s*길|연기\s*속|책상\s*앞|가로등\s*아래|담벼락\s*앞|담벼락|침대\s*옆|침대\s*앞|냉장고\s*앞|현관\s*앞|현관|명상\s*중|창문\s*앞|바닥|지하|2층|3층|옥상|골목\s*안쪽|골목\s*입구|골목\s*끝|골목\s*어귀|어귀|한복판|전투|결투|격전지|추격|거울\s*앞)(?=\s*-)/u;
+const BASE_LOC_SUFFIXES = /\s+(입구|출구|중앙|중간|한가운데|안쪽|한쪽|끝|구석|옆길|뒤쪽|위|아래|강변|강가|강위|산위|산아래|정문\s*앞|창가|복도|계단|세면대\s*앞|문\s*앞|초입|막다른\s*길|연기\s*속|어둠\s*속|책상\s*앞|가로등\s*아래|담벼락\s*앞|담벼락|침대\s*옆|침대\s*앞|냉장고\s*앞|현관\s*앞|현관|명상\s*중|창문\s*앞|바닥|지하|2층|3층|옥상|골목\s*안쪽|골목\s*입구|골목\s*끝|골목\s*어귀|어귀|한복판|전투|결투|격전지|추격|거울\s*앞|깨어남|마주침|대립|대치|몸싸움|충돌|도주|추적|탈출|은신|잠복|운명의\s*시작)(?=\s*-)/u;
 function extractBaseLocation(rawSlug: string): string {
     return extractSlugKey(rawSlug).replace(BASE_LOC_SUFFIXES, '').trim();
 }
@@ -1231,7 +1277,7 @@ function detectBaseLocationStreak(script: string): number {
     for (let j = 1; j < bases.length; j++) {
         if (bases[j] === bases[j - 1]) {
             streak++;
-            if (streak === BASE_STREAK_LIMIT + 1) violations++;
+            if (streak === BASE_STREAK_LIMIT) violations++; // trigger at exactly LIMIT, not LIMIT+1
         } else {
             streak = 1;
         }
@@ -1364,12 +1410,15 @@ function fixSlugTimeOfDay(script: string): string {
                 return newSlug;
             }
 
-            // Looks like a sub-location rather than time (e.g. "계단", "복도") — append time
+            // Looks like a sub-location rather than time (e.g. "계단", "복도", "입구") —
+            // Move the sub-location token into the place name and append correct time.
+            // This avoids double-dash: "PLACE - 계단" → "PLACE 계단 - 시간대"  (NOT "PLACE - 계단 - 시간대")
             const isSubLoc = /^[가-힣\s]{1,10}$/.test(timePart) && !VALID_TIMES.some(t => timePart.includes(t));
             if (isSubLoc) {
                 fixed++;
-                const newSlug = `${slugLine.trimEnd()} - ${lastValidTime}`;
-                console.warn(`>>> [V162 Slug Time Fix] Sub-location as time "${timePart}" → appended "${lastValidTime}": ${slugLine.trim()}`);
+                const placeBase = slugLine.substring(0, dashIdx).trimEnd(); // everything before the dash
+                const newSlug = `${placeBase} ${timePart} - ${lastValidTime}`;
+                console.warn(`>>> [V162 Slug Time Fix] Sub-loc-as-time "${timePart}" → moved to place: ${newSlug.trim()}`);
                 return newSlug;
             }
 
@@ -1379,6 +1428,35 @@ function fixSlugTimeOfDay(script: string): string {
 
     if (fixed > 0) {
         console.warn(`>>> [V162 Slug Time Fix] Fixed ${fixed} slug(s) with invalid/missing time-of-day.`);
+    }
+    return result;
+}
+
+/**
+ * V163: Strip action/event words from slugline sub-location tokens.
+ * AI sometimes uses verbs or event descriptions as sub-locations:
+ *   "INT. 천도당 깨어남 - 새벽" → "INT. 천도당 - 새벽"
+ *   "INT. 천도당 안쪽 대치 - 이른 아침" → "INT. 천도당 안쪽 - 이른 아침"
+ * These words describe WHAT HAPPENS in the scene, not WHERE it takes place.
+ * They must appear in action lines, not sluglines.
+ */
+const SLUG_ACTION_WORDS = /\s+(깨어남|마주침|대립|대치|몸싸움|충돌|도주|추적|탈출|은신|잠복|운명의\s*시작|어둠\s*속|격전|전투|결투|추격|격전지|긴장|위기|위험|절정|전야|결전|각성|발동|변신|폭발|충격|맞닥뜨림|발각|침투|잠입|대결|비밀|고백|위협|협박|습격|매복|기습)(?=\s*-)/gu;
+
+function stripActionWordsFromSlugs(script: string): string {
+    let fixed = 0;
+    const result = script.replace(
+        /^(S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.\s*(?:INT|EXT|I|E)\.[^\n]+)$/gm,
+        (slugLine) => {
+            const cleaned = slugLine.replace(SLUG_ACTION_WORDS, (match, word) => {
+                fixed++;
+                console.warn(`>>> [V163 Slug Action Strip] Removed action word "${word.trim()}" from slug: ${slugLine.trim()}`);
+                return ''; // remove the token entirely; trailing space before '-' handled by regex
+            });
+            return cleaned;
+        }
+    );
+    if (fixed > 0) {
+        console.warn(`>>> [V163 Slug Action Strip] Removed ${fixed} action-word token(s) from sluglines.`);
     }
     return result;
 }
