@@ -131,6 +131,15 @@ export class ScriptScribe {
                 if (response.success) {
                     let content = scrubMeta(response.data.content || "");
 
+                    // V140.5: JSON parsed but content field is empty — salvage screenplay from rawText
+                    if (!content && lastRawResponse.includes('S#')) {
+                        const sceneMatch = lastRawResponse.match(/S#\s*\d+[\s\S]*/);
+                        if (sceneMatch) {
+                            content = scrubMeta(sceneMatch[0]);
+                            console.warn(`>>> [V140.5 Raw Fallback] Chunk ${i + 1}: JSON content empty, recovered ${content.length} chars from raw text.`);
+                        }
+                    }
+
                     // V140: Circuit Breaker - Repetition / Stuttering Detection
                     const currentHeader = content.substring(0, 100).trim();
                     if (i > 0 && currentHeader === lastChunkHeader && retryCount === 0) {
@@ -364,6 +373,7 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 여기서 뭘 하는 거요?
 10. **INVENT DIALOGUE**: Screenwriters CREATE dialogue. Even when adapting prose with no dialogue, you MUST give characters voices. Invent lines that reveal character, advance plot, or react to the situation.
 11. **NO REPETITION**: Every scene MUST advance the story forward. If a scene does not change the situation, location, or character state compared to the previous scene — DO NOT write it. Merge or skip it. Writing the same hesitation or action twice in two consecutive scenes is a CRITICAL ERROR.
+14. **LOCATION VARIETY**: Do NOT write more than 2 consecutive scenes at the exact same slugline (same place AND same time of day). If action continues, use CUT TO, move to a different sub-location, or shift the time indicator (e.g., 밤 → 새벽). Three or more scenes with the identical slugline in a row is a formatting error.
 12. **MULTI-CHARACTER SCENES**: Whenever the story beats involve 2+ characters, scenes MUST feature dialogue exchanges between them — not solo monologue. A character talking only to themselves when other characters are present is an error.
 13. **SOLO MONOLOGUE LIMIT**: If a character is genuinely alone, limit self-talk to 2 lines per scene. Fill remaining dialogue requirement with physical actions, ambient sounds, or reactive behaviour.
 ${guidelinesBlock}
