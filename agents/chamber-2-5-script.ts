@@ -144,23 +144,20 @@ export class ScriptScribe {
                         retryCount++;
                         continue;
                     }
-                    console.log(`>>> [V141] Chunk ${i + 1} dialogue density: ${(density * 100).toFixed(1)}%`);
 
                     // V143: Expansion Pass — if content < 75% of target OR dialogue density < 20%
-                    const postDensity = content ? getDialogueDensity(content) : 0;
-                    const needsExpansion = content && (content.length < sectionLengthTarget * 0.75 || postDensity < 0.20);
+                    const needsExpansion = content && (content.length < sectionLengthTarget * 0.75 || density < 0.20);
                     if (needsExpansion) {
                         const shortage = Math.max(0, sectionLengthTarget - content.length);
-                        console.warn(`>>> [V143 Expansion Pass] Chunk ${i + 1}: ${content.length}/${sectionLengthTarget} chars, density ${(postDensity * 100).toFixed(1)}%. Expanding...`);
+                        console.warn(`>>> [V143 Expansion Pass] Chunk ${i + 1}: ${content.length}/${sectionLengthTarget} chars, density ${(density * 100).toFixed(1)}%. Expanding...`);
                         const expandPrompt = `You are a professional Korean screenplay writer. The following screenplay is too short AND has too little dialogue. Your job is to expand it by adding MORE DIALOGUE EXCHANGES between characters.
 
 RULES:
 1. Add 2-4 new spoken dialogue lines per scene (character name on its own line, then spoken text below).
 2. Characters must REACT TO EACH OTHER. If only one character is present, they speak aloud more — to themselves, to the environment, to unseen forces.
-3. Do NOT add internal state descriptions ("그의 눈빛은...", "그는 마치...", "그의 마음속에..."). These are FORBIDDEN.
-4. Do NOT add atmosphere/environment descriptions. Only physical action + dialogue.
-5. Keep existing scene sluglines (S# N. ...) intact.
-6. Add approximately ${shortage} more characters, primarily through dialogue.
+3. Action lines describe ONLY what the camera can physically record. No emotional state or internal thought.
+4. Keep existing scene sluglines (S# N. ...) intact.
+5. Add approximately ${shortage} more characters, primarily through dialogue.
 
 Current screenplay:
 ${content}
@@ -172,10 +169,17 @@ Output the full expanded screenplay in the same S# format. Korean only.`;
                         });
                         const expandedText = expandResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
                         if (expandedText && expandedText.length > content.length) {
-                            console.log(`>>> [V143] Expanded ${content.length} → ${expandedText.length} chars`);
                             content = scrubMeta(expandedText);
                         }
                     }
+
+                    // V141 final density after all passes — if still 0%, use programmatic injection
+                    const finalDensity = content ? getDialogueDensity(content) : 0;
+                    if (content && finalDensity < 0.05) {
+                        console.warn(`>>> [V141 Fallback] Chunk ${i + 1} still at ${(finalDensity * 100).toFixed(1)}% after expansion. Running programmatic injection...`);
+                        content = await injectDialoguePass(content, charContext, model);
+                    }
+                    console.log(`>>> [V141] Chunk ${i + 1} FINAL dialogue density: ${(getDialogueDensity(content) * 100).toFixed(1)}%`);
 
                     if (content) {
                         fullScript += (content + "\n\n");
