@@ -141,8 +141,30 @@ export class ScriptScribe {
                         }
                     }
 
-                    // V140.5: JSON parsed but content field is empty — salvage screenplay from rawText
+                    // V140.5: JSON parsed but content field is empty
+                    if (!content) {
+                        // Case A: model used 'screenplay' key instead of 'content'
+                        const altKey = response.data?.screenplay || response.data?.script || response.data?.text || '';
+                        if (typeof altKey === 'string' && altKey.length > 50) {
+                            content = scrubMeta(altKey);
+                            console.warn(`>>> [V140.5 Key Fix] Chunk ${i + 1}: Extracted from alt JSON key (${content.length} chars).`);
+                        }
+                    }
+
+                    if (!content && lastRawResponse.trim().startsWith('{')) {
+                        // Case B: raw response is JSON — re-parse and probe known screenplay keys
+                        try {
+                            const reparsed = JSON.parse(lastRawResponse);
+                            const candidate = reparsed.screenplay || reparsed.content || reparsed.script || reparsed.text || '';
+                            if (typeof candidate === 'string' && candidate.length > 50) {
+                                content = scrubMeta(candidate);
+                                console.warn(`>>> [V140.5 JSON Key] Chunk ${i + 1}: Re-parsed JSON key match (${content.length} chars).`);
+                            }
+                        } catch { /* fall through to regex recovery */ }
+                    }
+
                     if (!content && lastRawResponse.includes('S#')) {
+                        // Case C: regex recovery — strip JSON wrapper artifacts before and after S# block
                         const sceneMatch = lastRawResponse.match(/S#\s*\d+[\s\S]*/);
                         if (sceneMatch) {
                             let recovered = sceneMatch[0];
@@ -152,6 +174,8 @@ export class ScriptScribe {
                                 recovered = recovered.substring(0, jsonBlobIdx).trim();
                                 console.warn(`>>> [V140.5] Stripped trailing JSON blob from raw recovery.`);
                             }
+                            // Strip trailing JSON closer: \n" } or " }
+                            recovered = recovered.replace(/\\n"\s*\}?\s*$/, '').replace(/"\s*\}\s*$/, '').trim();
                             if (recovered.length > 50) {
                                 content = scrubMeta(recovered);
                                 console.warn(`>>> [V140.5 Raw Fallback] Chunk ${i + 1}: JSON content empty, recovered ${content.length} chars from raw text.`);
