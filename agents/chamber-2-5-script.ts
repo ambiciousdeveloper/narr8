@@ -135,42 +135,44 @@ export class ScriptScribe {
                         continue;
                     }
 
-                    // V141: Dialogue Density Enforcement — retry if dialogue ratio < 20%
+                    // V141: Dialogue Density Enforcement — retry if empty or dialogue ratio < 20%
                     const density = content ? getDialogueDensity(content) : 0;
-                    if (content && density < 0.20 && retryCount < 2) {
-                        console.warn(`>>> [V141 Dialogue Density] Chunk ${i + 1} density too low (${(density * 100).toFixed(1)}%). Retrying with dialogue injection prompt...`);
+                    if ((!content || density < 0.20) && retryCount < 2) {
+                        console.warn(`>>> [V141 Dialogue Density] Chunk ${i + 1} ${!content ? 'empty' : `density ${(density * 100).toFixed(1)}%`}. Retrying...`);
                         currentTemp = Math.min(0.9, currentTemp + 0.2);
                         dialogueRetry = true;
                         retryCount++;
                         continue;
                     }
 
-                    // V143: Expansion Pass — if content < 75% of target OR dialogue density < 20%
-                    const needsExpansion = !content || content.length < sectionLengthTarget * 0.75 || density < 0.20;
-                    if (needsExpansion) {
-                        const shortage = Math.max(0, sectionLengthTarget - content.length);
+                    // V143: Expansion Pass — only for non-empty content that is too short or too sparse
+                    // Empty content means main generation failed entirely; V143 (expansion) cannot fix that.
+                    if (content && (content.length < sectionLengthTarget * 0.75 || density < 0.20)) {
+                        const shortage = sectionLengthTarget - content.length;
                         console.warn(`>>> [V143 Expansion Pass] Chunk ${i + 1}: ${content.length}/${sectionLengthTarget} chars, density ${(density * 100).toFixed(1)}%. Expanding...`);
-                        const contentOrPlaceholder = content || `[SECTION ${i + 1} — GENERATE FROM SCRATCH using beats: ${chunk}]`;
-                        const expandPrompt = `You are a professional Korean screenplay writer. ${content ? 'The following screenplay is too short AND has too little dialogue. Expand it by adding MORE DIALOGUE EXCHANGES.' : 'Write this screenplay section from scratch with rich dialogue.'} Target: approximately ${sectionLengthTarget} characters.
+                        const expandPrompt = `You are a professional Korean screenplay writer. The following screenplay is too short AND has too little dialogue. Expand it by adding MORE DIALOGUE EXCHANGES between characters. Target: approximately ${sectionLengthTarget} total characters.
 
 RULES:
-1. Each scene MUST have dialogue: character name on its own line, then spoken text below.
-2. If only one character is present, they speak aloud — to themselves, to the environment, to unseen forces.
-3. Action lines describe ONLY what the camera can physically record. No emotional state or internal thought.
-4. Use format "S# N. [PLACE] - [TIME]" for each scene. Start from S# ${contextState.lastSceneNumber + 1}.
-5. Write approximately ${shortage || sectionLengthTarget} more characters, primarily through dialogue.
+1. Add dialogue after every 2-3 action lines: character name alone on one line, spoken text on the next.
+2. Characters must speak — to each other, to themselves, or to the situation aloud.
+3. Action lines describe ONLY what the camera physically records. No internal state or emotional narration.
+4. Keep all existing scene sluglines (S# N. ...) intact. Write in Korean only.
+5. Add approximately ${shortage} more characters through dialogue.
 
-${content ? `Current screenplay:\n${contentOrPlaceholder}` : `Story beats:\n${chunk}`}
+Current screenplay:
+${content}
 
-Output the full screenplay in S# format. Korean only.`;
+Output the full expanded screenplay in Korean S# format.`;
                         const expandResult = await model.generateContent({
                             contents: [{ role: 'user', parts: [{ text: expandPrompt }] }],
                             generationConfig: { temperature: 0.6, maxOutputTokens: 16000 }
                         });
                         const expandedText = expandResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
-                        if (expandedText && expandedText.length > (content?.length ?? 0)) {
+                        if (expandedText && expandedText.length > content.length) {
                             content = scrubMeta(expandedText);
                         }
+                    } else if (!content) {
+                        console.warn(`>>> [V143 Skip] Chunk ${i + 1} has no content. Main generation failed — skipping expansion.`);
                     }
 
                     // V141 final density after all passes — if still 0%, use programmatic injection
