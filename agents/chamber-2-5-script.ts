@@ -191,6 +191,7 @@ RULES:
 3. Action lines describe ONLY what the camera physically records. No internal state or emotional narration.
 4. Keep all existing scene sluglines (S# N. ...) intact. Write in Korean only.
 5. Add approximately ${shortage} more characters through dialogue.
+6. LOCATION VARIETY CHECK: If 3 or more consecutive scenes share the exact same slugline, you MUST change at least one of them to a neighboring sub-location (append "계단", "안쪽", "입구", etc. to the place name) or shift the time label (새벽 → 이른 아침). Identical sluglines repeated 3+ times in a row is a formatting error.
 
 Current screenplay:
 ${content}
@@ -246,6 +247,14 @@ ${chunk}
                         content = await injectDialoguePass(content, charContext, model);
                     }
                     console.log(`>>> [V141] Chunk ${i + 1} FINAL dialogue density: ${(getDialogueDensity(content) * 100).toFixed(1)}%`);
+
+                    // V145: Consecutive slugline violation check
+                    if (content) {
+                        const slugViolations = detectConsecutiveSlugs(content);
+                        if (slugViolations > 0) {
+                            console.warn(`>>> [V145 Slug Check] Chunk ${i + 1}: ${slugViolations} location(s) used 3+ times consecutively.`);
+                        }
+                    }
 
                     if (content) {
                         fullScript += (content + "\n\n");
@@ -603,6 +612,26 @@ function convertScenesJsonToScreenplay(scenes: any[]): string {
         const body = Array.isArray(scene.actions) ? scene.actions.join('\n') : '';
         return `${slug}\n${body}`;
     }).filter(s => s.trim()).join('\n\n');
+}
+
+/**
+ * V145: Detects how many distinct locations appear 3+ times consecutively in a script.
+ * Returns the count of such violations for logging purposes.
+ */
+function detectConsecutiveSlugs(script: string): number {
+    const slugLines = script.match(/^S#\s*\d+\.\s*.+/gm) || [];
+    const locations = slugLines.map(s => s.replace(/^S#\s*\d+\.\s*/, '').trim());
+    let violations = 0;
+    let streak = 1;
+    for (let j = 1; j < locations.length; j++) {
+        if (locations[j] === locations[j - 1]) {
+            streak++;
+            if (streak === 3) violations++;
+        } else {
+            streak = 1;
+        }
+    }
+    return violations;
 }
 
 // safeParseJSON is imported from lib/json-repair.ts
