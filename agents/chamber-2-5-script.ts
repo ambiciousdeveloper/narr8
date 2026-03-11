@@ -238,7 +238,7 @@ Output the full expanded screenplay in Korean S# format.`;
                         const expandedText = expandResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
                         if (expandedText && expandedText.length > content.length) {
                             content = scrubMeta(expandedText);
-                            content = scrubInternalStatements(content); // V152
+                            content = scrubInternalStatementsFallback(content); // V152 lightweight per-chunk pass
                         }
                         // V143B: Second expansion pass — if first expansion still left content under 70% of target
                         if (content && content.length < sectionLengthTarget * 0.70) {
@@ -271,7 +271,7 @@ Output the full expanded screenplay.`;
                                 const expandedText2 = expandResult2.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
                                 if (expandedText2 && expandedText2.length > content.length) {
                                     content = scrubMeta(expandedText2);
-                                    content = scrubInternalStatements(content);
+                                    content = scrubInternalStatementsFallback(content); // V152 lightweight per-chunk pass
                                     console.warn(`>>> [V143B 2nd Expansion] Chunk ${i + 1}: expanded to ${content.length} chars.`);
                                 }
                             } catch (e) {
