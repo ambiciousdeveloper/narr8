@@ -294,6 +294,17 @@ ${chunk}
             fullScript = await injectDialoguePass(fullScript, charContext, model);
         }
 
+        // V146: Renumber scenes sequentially to fix duplicates from Rule 6 splits
+        fullScript = renumberScenes(fullScript);
+
+        // V145 full-script check (cross-chunk violations)
+        const totalSlugViolations = detectConsecutiveSlugs(fullScript);
+        if (totalSlugViolations > 0) {
+            console.warn(`>>> [V145 Full-Script Slug Check] ${totalSlugViolations} location(s) appear 3+ times consecutively across full script.`);
+        } else {
+            console.log(`>>> [V145 Full-Script Slug Check] OK — no consecutive slug violations.`);
+        }
+
         return {
             success: true,
             data: {
@@ -615,12 +626,24 @@ function convertScenesJsonToScreenplay(scenes: any[]): string {
 }
 
 /**
+ * V145: Extracts only the "INT/EXT. LOCATION - TIME" portion from a slugline,
+ * stripping any action text that may appear on the same line.
+ */
+function extractSlugKey(rawSlug: string): string {
+    // Remove "S# N. " prefix
+    const body = rawSlug.replace(/^S#\s*\d+\.\s*/, '').trim();
+    // Match up to and including the time indicator (밤/낮/새벽/아침/오후/저녁/황혼/심야 etc.)
+    const m = body.match(/^(?:INT|EXT)\..+?-\s*(?:밤|낮|새벽|이른\s*아침|아침|오후|저녁|황혼|심야|한낮|정오)/);
+    return m ? m[0].trim() : body.split(/\s{2,}/)[0].trim();
+}
+
+/**
  * V145: Detects how many distinct locations appear 3+ times consecutively in a script.
  * Returns the count of such violations for logging purposes.
  */
 function detectConsecutiveSlugs(script: string): number {
     const slugLines = script.match(/^S#\s*\d+\.\s*.+/gm) || [];
-    const locations = slugLines.map(s => s.replace(/^S#\s*\d+\.\s*/, '').trim());
+    const locations = slugLines.map(extractSlugKey);
     let violations = 0;
     let streak = 1;
     for (let j = 1; j < locations.length; j++) {
@@ -632,6 +655,18 @@ function detectConsecutiveSlugs(script: string): number {
         }
     }
     return violations;
+}
+
+/**
+ * V146: Renumber all S# scene numbers in assembled fullScript sequentially.
+ * Fixes duplicates caused by V143 Rule 6 splitting a scene into two with same number.
+ */
+function renumberScenes(script: string): string {
+    let counter = 0;
+    return script.replace(/^(S#\s*)\d+(\.\s*)/gm, (_, prefix, suffix) => {
+        counter++;
+        return `${prefix}${counter}${suffix}`;
+    });
 }
 
 // safeParseJSON is imported from lib/json-repair.ts
