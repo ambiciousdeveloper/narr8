@@ -295,6 +295,39 @@ ${chunk}
                         } else {
                             console.log(`>>> [V149 Base Slug Check] Chunk ${i + 1}: OK.`);
                         }
+
+                        // V153: Per-chunk dream scene cap — enforce max 1 sleep/nightmare scene per chunk
+                        // This catches Chunk 1 over-generating dream scenes before the cross-chunk ban activates.
+                        const DREAM_DETECT_V153 = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자'];
+                        const chunkBlocks = content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim());
+                        const dreamBlocks = chunkBlocks.filter(b => DREAM_DETECT_V153.some(kw => b.includes(kw)));
+                        if (dreamBlocks.length > 1) {
+                            console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: ${dreamBlocks.length} dream scenes detected (max 1). Requesting consolidation...`);
+                            const consolidatePrompt = `아래 한국어 시나리오에 악몽/꿈/수면 관련 씬(S#)이 ${dreamBlocks.length}개 포함되어 있습니다. 최대 1개만 허용됩니다.
+규칙:
+1. 악몽/수면 씬 중 가장 극적으로 중요한 씬 1개만 남기고 나머지는 삭제하세요.
+2. 삭제된 씬의 S# 번호와 나머지 씬들의 S# 번호를 순서대로 재정렬하세요.
+3. 씬 내용(대사, 지문)은 절대 변경하지 마세요 — S# 번호와 악몽 씬 삭제만 수행하세요.
+4. 수정된 대본 전체를 그대로 출력하세요.
+
+대본:
+${content}`;
+                            try {
+                                const consolidateResult = await model.generateContent({
+                                    contents: [{ role: 'user', parts: [{ text: consolidatePrompt }] }],
+                                    generationConfig: { temperature: 0.2, maxOutputTokens: 16000 }
+                                });
+                                const consolidated = consolidateResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+                                if (consolidated && consolidated.length > content.length * 0.7) {
+                                    content = scrubMeta(consolidated);
+                                    console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: consolidated to ${content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim() && DREAM_DETECT_V153.some(kw => b.includes(kw))).length} dream scene(s).`);
+                                }
+                            } catch (e) {
+                                console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: consolidation error — ${e}.`);
+                            }
+                        } else {
+                            console.log(`>>> [V153 Dream Cap] Chunk ${i + 1}: OK (${dreamBlocks.length} dream scene(s)).`);
+                        }
                     }
 
                     if (content) {
@@ -417,6 +450,13 @@ const INTERNAL_STATE_PATTERNS: RegExp[] = [
     /[^。\n]*혼란스러움이?\s[^。\n]*/g,
     /[^。\n]*복잡한\s*감정[^。\n]*/g,
     /[^。\n]*생각에\s*잠겼다[^。\n]*/g,
+    /[^。\n]*생각에\s*잠긴다[^。\n]*/g,
+    /[^。\n]*깊은\s*생각에[^。\n]*/g,
+    /[^。\n]*결심한다[^。\n]*/g,
+    /[^。\n]*결심을\s*다진다[^。\n]*/g,
+    /[^。\n]*고독과\s*불안[^。\n]*/g,
+    /[^。\n]*두려움을\s*느[^。\n]*/g,
+    /[^。\n]*[을를]\s*느끼[며고]?[^。\n]*/g,
     /[^。\n]*믿는다\s*$/,
     /[^。\n]*알\s*수\s*있다\s*$/,
 ];
@@ -645,9 +685,9 @@ function updateContextState(content: string, state: any) {
     );
     const lastAction = actionLines[actionLines.length - 1] || state.lastAction;
 
-    // Track recently used sluglines to inject into the next chunk prompt
-    const sluglineMatches = content.match(/^S#\s*\d+\.\s*[^\n]+/gm) || [];
-    const extractedSlugs = sluglineMatches.map(s => s.replace(/^S#\s*\d+\.\s*/, '').trim()).filter(Boolean);
+    // Track recently used sluglines to inject into the next chunk prompt (include A-suffix variants)
+    const sluglineMatches = content.match(/^S#\s*\d+[A-Za-z]?\.\s*[^\n]+/gm) || [];
+    const extractedSlugs = sluglineMatches.map(s => s.replace(/^S#\s*\d+[A-Za-z]?\.\s*/, '').trim()).filter(Boolean);
     const updatedSlugs = [...(state.recentSlugs || []), ...extractedSlugs].slice(-8);
 
     // V148: dream scene tracking — count sleep/nightmare S# scene blocks (not keyword mentions)
@@ -812,8 +852,8 @@ function convertScenesJsonToScreenplay(scenes: any[]): string {
  * stripping any action text that may appear on the same line.
  */
 function extractSlugKey(rawSlug: string): string {
-    // Remove "S# N. " prefix
-    const body = rawSlug.replace(/^S#\s*\d+\.\s*/, '').trim();
+    // Remove "S# N." or "S# 13A." prefix (alpha suffix included)
+    const body = rawSlug.replace(/^S#\s*\d+[A-Za-z]?\.\s*/, '').trim();
     // Match up to and including the time indicator (밤/낮/새벽/아침/오후/저녁/황혼/심야 etc.)
     const m = body.match(/^(?:INT|EXT)\..+?-\s*(?:밤|낮|새벽|이른\s*아침|아침|오후|저녁|황혼|심야|한낮|정오)/);
     return m ? m[0].trim() : body.split(/\s{2,}/)[0].trim();
@@ -868,7 +908,8 @@ ${script}`;
  * Returns the count of such violations for logging purposes.
  */
 function detectConsecutiveSlugs(script: string): number {
-    const slugLines = script.match(/^S#\s*\d+\.\s*.+/gm) || [];
+    // Include optional alpha suffix (e.g. S# 13A.) so A-variants are counted as scene headers
+    const slugLines = script.match(/^S#\s*\d+[A-Za-z]?\.\s*.+/gm) || [];
     const locations = slugLines.map(extractSlugKey);
     let violations = 0;
     let streak = 1;
@@ -897,7 +938,7 @@ function extractBaseLocation(rawSlug: string): string {
  * Catches battles/chases where V147 sub-location splits fool V145.
  */
 function detectBaseLocationStreak(script: string): number {
-    const slugLines = script.match(/^S#\s*\d+\.\s*.+/gm) || [];
+    const slugLines = script.match(/^S#\s*\d+[A-Za-z]?\.\s*.+/gm) || [];
     const bases = slugLines.map(extractBaseLocation);
     let violations = 0;
     let streak = 1;
@@ -914,11 +955,13 @@ function detectBaseLocationStreak(script: string): number {
 
 /**
  * V146: Renumber all S# scene numbers in assembled fullScript sequentially.
- * Fixes duplicates caused by V143 Rule 6 splitting a scene into two with same number.
+ * Handles both "S# 13." and "S# 13A." (alpha-suffixed) formats produced when
+ * the model bypasses HARD STOP by inserting 13A instead of a new number.
  */
 function renumberScenes(script: string): string {
     let counter = 0;
-    return script.replace(/^(S#\s*)\d+(\.\s*)/gm, (_, prefix, suffix) => {
+    // Match S# followed by digits with optional alpha suffix (e.g. 13A, 14B) then a dot
+    return script.replace(/^(S#\s*)\d+[A-Za-z]?(\.\s*)/gm, (_, prefix, suffix) => {
         counter++;
         return `${prefix}${counter}${suffix}`;
     });
