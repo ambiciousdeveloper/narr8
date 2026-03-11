@@ -312,7 +312,25 @@ export class GrandDirector {
       const result = await model.generateContent(prompt);
       const text = result.response.text();
       const match = text.match(/\[[\s\S]*\]/);
-      if (match) return JSON.parse(match[0]);
+      if (match) {
+        try {
+          return JSON.parse(match[0]);
+        } catch {
+          // Sanitize unescaped control characters inside JSON string tokens and retry
+          const cleaned = match[0].replace(/"(?:[^"\\]|\\.)*"/g, (token) =>
+            token
+              .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+              .replace(/\n/g, '\\n')
+              .replace(/\r/g, '\\r')
+              .replace(/\t/g, '\\t')
+          );
+          try {
+            const parsed = JSON.parse(cleaned);
+            console.warn(`>>> [GrandDirector] Prose Extraction: Sanitized control chars, re-parsed ${parsed.length} beats.`);
+            return parsed;
+          } catch { /* fall through */ }
+        }
+      }
       return [prose.substring(0, 500)];
     } catch (error) {
       console.error(">>> [GrandDirector] Prose Extraction Failed:", error);
