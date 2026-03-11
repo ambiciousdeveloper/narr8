@@ -124,10 +124,10 @@ export class ScriptScribe {
                     ...contextState
                 });
 
-                const result = await model.generateContent({
+                const result = await generateWithRetry(model, {
                     contents: [{ role: 'user', parts: [{ text: prompt }] }],
                     generationConfig: { temperature: currentTemp, maxOutputTokens: 24000 }
-                });
+                }, `Chunk ${i + 1} main generation`);
 
                 lastRawResponse = result.response.text();
                 const response = safeParseJSON(lastRawResponse);
@@ -229,10 +229,10 @@ Current screenplay:
 ${content}
 
 Output the full expanded screenplay in Korean S# format.`;
-                        const expandResult = await model.generateContent({
+                        const expandResult = await generateWithRetry(model, {
                             contents: [{ role: 'user', parts: [{ text: expandPrompt }] }],
                             generationConfig: { temperature: 0.6, maxOutputTokens: 16000 }
-                        });
+                        }, `Chunk ${i + 1} V143 expansion`);
                         const expandedText = expandResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
                         if (expandedText && expandedText.length > content.length) {
                             content = scrubMeta(expandedText);
@@ -262,10 +262,10 @@ ${content}
 
 Output the full expanded screenplay.`;
                             try {
-                                const expandResult2 = await model.generateContent({
+                                const expandResult2 = await generateWithRetry(model, {
                                     contents: [{ role: 'user', parts: [{ text: expandPrompt2 }] }],
                                     generationConfig: { temperature: 0.65, maxOutputTokens: 16000 }
-                                });
+                                }, `Chunk ${i + 1} V143B 2nd expansion`);
                                 const expandedText2 = expandResult2.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
                                 if (expandedText2 && expandedText2.length > content.length) {
                                     content = scrubMeta(expandedText2);
@@ -295,10 +295,10 @@ ${chunk}
 
 시나리오:`;
                         try {
-                            const miniResult = await model.generateContent({
+                            const miniResult = await generateWithRetry(model, {
                                 contents: [{ role: 'user', parts: [{ text: miniPrompt }] }],
                                 generationConfig: { temperature: 0.75, maxOutputTokens: 8000 }
-                            });
+                            }, `Chunk ${i + 1} V144 mini-gen`);
                             const miniText = miniResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
                             if (miniText && miniText.length > 100) {
                                 content = scrubMeta(miniText);
@@ -385,10 +385,10 @@ ${chunk}
 대본:
 ${content}`;
                                 try {
-                                    const consolidateResult = await model.generateContent({
+                                    const consolidateResult = await generateWithRetry(model, {
                                         contents: [{ role: 'user', parts: [{ text: consolidatePrompt }] }],
                                         generationConfig: { temperature: 0.1, maxOutputTokens: 16000 }
-                                    });
+                                    }, `Chunk ${i + 1} V153 dream consolidation attempt ${attempt}`);
                                     const consolidated = consolidateResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
                                     // Accept if output is >= 60% of original (allows meaningful removal)
                                     if (consolidated && consolidated.length > content.length * 0.6) {
@@ -978,10 +978,10 @@ ${charContext.substring(0, 1500)}
 ${scenesWithChars.map((s, i) => `Scene ${i + 1} — ${s.charName} speaks:\n${s.block.substring(0, 250)}`).join('\n\n')}`;
 
     try {
-        const result = await model.generateContent({
+        const result = await generateWithRetry(model, {
             contents: [{ role: 'user', parts: [{ text: batchPrompt }] }],
             generationConfig: { temperature: 0.8, maxOutputTokens: 2000 }
-        });
+        }, 'V142 dialogue injection');
         const responseText = result.response.text();
         const match = responseText.match(/\[[\s\S]*\]/);
         if (!match) {
@@ -1066,10 +1066,10 @@ ${script}`;
     try {
         // Full-script fix needs more tokens than per-chunk fix
         const fixTokens = script.length > 6000 ? 24000 : 12000;
-        const result = await model.generateContent({
+        const result = await generateWithRetry(model, {
             contents: [{ role: 'user', parts: [{ text: fixPrompt }] }],
             generationConfig: { temperature: 0.3, maxOutputTokens: fixTokens }
-        });
+        }, `V147 slug fix chunk ${chunkNum}`);
         const fixed = result.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
         if (fixed && fixed.length > script.length * 0.9) {
             const remaining = detectConsecutiveSlugs(fixed);
@@ -1207,6 +1207,31 @@ function removeDuplicateSceneTransitions(script: string): string {
         console.log(`>>> [V157 Dup Remove] Total ${removedTotal} duplicate transition line(s) removed across script.`);
     }
     return result.join('');
+}
+
+/**
+ * V159: Rate-limit aware wrapper for model.generateContent().
+ * Retries up to 4 times with exponential backoff on 429 Too Many Requests errors.
+ */
+async function generateWithRetry(model: any, request: any, context: string = ''): Promise<any> {
+    const delays = [2000, 4000, 8000, 16000];
+    for (let attempt = 0; attempt <= 4; attempt++) {
+        try {
+            return await model.generateContent(request);
+        } catch (err: any) {
+            const is429 = err?.status === 429
+                || err?.message?.includes('429')
+                || err?.message?.includes('Too Many Requests')
+                || err?.message?.includes('Resource exhausted');
+            if (is429 && attempt < 4) {
+                const delay = delays[attempt];
+                console.warn(`>>> [V159 Rate Limit] ${context}: 429 received. Waiting ${delay}ms before retry ${attempt + 1}/4...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
+            }
+            throw err;
+        }
+    }
 }
 
 // safeParseJSON is imported from lib/json-repair.ts
