@@ -92,7 +92,7 @@ export class ScriptScribe {
             if (!chunk && i > 0) break;
 
             let retryCount = 0;
-            let currentTemp = 0.7;
+            let currentTemp = 0.6;
             let dialogueRetry = false;
 
             while (retryCount < 3) {
