@@ -81,7 +81,9 @@ export class ScriptScribe {
             lastSceneNumber: 0,
             recentSlugs: [] as string[],
             dreamSceneCount: 0,  // V148: 전체 대본에서 악몽/수면 씬 누적 카운트 (최대 2회 허용)
-            protagonistPronouns: '' as string  // V158: 첫 청크 생성 후 감지된 주인공 대명사 (그/그녀), 이후 청크에 명시 주입
+            protagonistPronouns: '' as string,  // V158: 첫 청크 생성 후 감지된 주인공 대명사 (그/그녀), 이후 청크에 명시 주입
+            lastTimeOfDay: '' as string,   // V161: 마지막 씬의 시간대 (밤/새벽/아침/낮/저녁) — 청크 간 시간 역행 방지
+            lastLocation: '' as string     // V161: 마지막 씬의 장소 — 청크 간 갑작스러운 장소 변경 시 전환 씬 요구
         };
 
         const beatChunk = Math.ceil(beats.length / actualSections);
@@ -339,11 +341,14 @@ ${chunk}
                         // Detection scans only the slug line + first 3 stage-direction lines of each scene block
                         // (excludes dialogue lines starting with a character name) to avoid false positives from
                         // characters mentioning "악몽" in conversation.
-                        const DREAM_DETECT_V153 = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자리', '침대', '누워'];
-                        const chunkBlocks = content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim());
+                        const DREAM_DETECT_V153 = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자리', '침대', '누워', '꿈'];
+                        const chunkBlocks = content.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim());
                         // Extract only header + stage directions (non-dialogue lines) for detection
                         function isDreamSceneBlock(block: string): boolean {
                             const lines = block.split('\n');
+                            // Fast-path: check slug line directly for dream marker (e.g. "INT. 천도당 - 꿈")
+                            const slugLine = lines.find(l => /^S#\s*\d/.test(l.trim()));
+                            if (slugLine && /[-\s]꿈(\s|$)/i.test(slugLine)) return true;
                             // Collect slug + stage-direction lines only (skip character name lines AND their following dialogue lines).
                             // A character name line: 2-6 Korean chars only, no punctuation, not a slug/place/time keyword.
                             const directionLines: string[] = [];
@@ -393,7 +398,7 @@ ${content}`;
                                     // Accept if output is >= 60% of original (allows meaningful removal)
                                     if (consolidated && consolidated.length > content.length * 0.6) {
                                         content = scrubMeta(consolidated);
-                                        dreamBlocks = content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim() && isDreamSceneBlock(b));
+                                        dreamBlocks = content.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim() && isDreamSceneBlock(b));
                                         console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: attempt ${attempt} → ${dreamBlocks.length} dream scene(s) remaining.`);
                                     } else {
                                         console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: attempt ${attempt} output too short (${consolidated.length}/${content.length}), stopping.`);
@@ -408,14 +413,14 @@ ${content}`;
                                 console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: ${dreamBlocks.length} dream scene(s) remain after retries.`);
                                 // V153 Programmatic Fallback: AI consolidation failed — remove extra dream scenes directly.
                                 // Keep the longest block (most dramatically developed), delete the rest.
-                                const allSceneBlocks = content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim());
+                                const allSceneBlocks = content.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim());
                                 const sortedDreams = [...dreamBlocks].sort((a, b) => b.length - a.length);
                                 const removeDreamSet = new Set(sortedDreams.slice(1));
                                 const filtered = allSceneBlocks.filter(b => !removeDreamSet.has(b));
                                 const patched = filtered.join('');
                                 if (patched && patched.length > content.length * 0.5) {
                                     content = renumberScenes(patched);
-                                    const remaining = content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim() && isDreamSceneBlock(b)).length;
+                                    const remaining = content.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim() && isDreamSceneBlock(b)).length;
                                     console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: programmatic fallback applied — ${sortedDreams.length - 1} extra dream scene(s) removed. Remaining: ${remaining}`);
                                 }
                             }
@@ -467,6 +472,9 @@ ${content}`;
 
         // V157: Remove duplicate transition lines between consecutive scenes
         fullScript = removeDuplicateSceneTransitions(fullScript);
+
+        // V160: Fix unnumbered bare slug lines embedded in scene bodies
+        fullScript = fixUnnumberedSlugs(fullScript);
 
         // V152: Final internal-state scrub on assembled script
         fullScript = scrubInternalStatements(fullScript);
@@ -595,6 +603,18 @@ const INTERNAL_STATE_PATTERNS: RegExp[] = [
     /[^。\n]*고민의\s*흔적[^。\n]*/g,
     /[^。\n]*마음을\s*더욱\s*무겁[^。\n]*/g,
     /[^。\n]*무거운\s*마음[^。\n]*/g,
+    // V152 추가 — 대본에서 발견된 잔존 패턴
+    /[^。\n]*눈에는\s*슬픔[^。\n]*/g,
+    /[^。\n]*눈에는\s*[가-힣]+이\s*가득[^。\n]*/g,
+    /[^。\n]*눈빛에\s*스며든[^。\n]*/g,
+    /[^。\n]*결연한\s*의지[^。\n]*/g,
+    /[^。\n]*의지가\s*엿보인[^。\n]*/g,
+    /[^。\n]*마음이\s*흔들[^。\n]*/g,
+    /[^。\n]*뒤섞여\s*있[^。\n]*/g,
+    /[^。\n]*걱정과\s*반가움[^。\n]*/g,
+    /[^。\n]*불안감[이가]?\s*엄습[^。\n]*/g,
+    /[^。\n]*공포가\s*엄습[^。\n]*/g,
+    /[^。\n]*두려움이\s*밀려[^。\n]*/g,
 ];
 function scrubInternalStatements(text: string): string {
     const lines = text.split('\n');
@@ -700,6 +720,27 @@ Do NOT write another full nightmare cycle (잠들다 → 악몽 → 깨어남) i
     const bpGlossary = bp.glossary ? JSON.stringify(bp.glossary).substring(0, 1000) : "";
     const bpChars = bp.character_arcs ? JSON.stringify(bp.character_arcs).substring(0, 1500) : "";
 
+    // V161: Time-of-day continuity lock — prevent temporal regression between chunks
+    const timeOrder = ['낮', '저녁', '밤', '새벽', '아침'];
+    const timeLock = p.lastTimeOfDay ? `
+⏰ [TIME-OF-DAY CONTINUITY — MANDATORY]
+The previous section ended at: **${p.lastTimeOfDay}**
+Time MUST move FORWARD (or stay the same) in this section. Time progression order: 낮 → 저녁 → 밤 → 새벽 → 아침 → 낮 (next day).
+FORBIDDEN: Writing a scene set in an EARLIER time-of-day than "${p.lastTimeOfDay}" without an explicit time-skip marker (e.g. "다음 날", "몇 시간 후").
+If the story beats imply a different time, insert one line of narration marking the time-skip before the first scene.
+⏰ [END TIME LOCK]
+` : '';
+
+    // V161: Location continuity — require a transition beat when jumping between very different locations
+    const locationLock = p.lastLocation ? `
+📍 [LOCATION CONTINUITY — MANDATORY]
+The previous section's last scene was at: **${p.lastLocation}**
+If the FIRST scene of THIS section is at a DIFFERENT location, you MUST include at least one transition beat:
+- One action line showing the character leaving (e.g., "한소라, 골목을 빠져나간다.")  OR arriving (e.g., "한소라, 학원 앞에 멈춰 선다.")
+- Do NOT cut directly from one distinct location to another without any bridging line.
+📍 [END LOCATION LOCK]
+` : '';
+
     // V158: Protagonist pronoun lock — inject explicit pronoun instruction if detected from prior chunks
     const pronounLock = p.protagonistPronouns ? `
 🔒 [PROTAGONIST PRONOUN LOCK — MANDATORY — CANNOT BE OVERRIDDEN]
@@ -715,7 +756,7 @@ Using ${p.protagonistPronouns === '그녀' ? '"그는", "그의", "그를"' : '"
 [ROLE]
 Professional Script Adaptor.
 Convert PROSE into a high-density, visual SCREENPLAY in **${langLabel}** ONLY.
-${pronounLock}${dreamBan}${dialogueAlert}${personaBlock}
+${pronounLock}${timeLock}${locationLock}${dreamBan}${dialogueAlert}${personaBlock}
 [GOLDEN FORMAT SAMPLE — 2-character exchange (this is the standard)]
 S# 10. INT. 낡은 무도장 - 밤
 먼지 쌓인 매트리스 위로 달빛이 스며든다.
@@ -836,8 +877,8 @@ function updateContextState(content: string, state: any) {
     const lastAction = actionLines[actionLines.length - 1] || state.lastAction;
 
     // Track recently used sluglines to inject into the next chunk prompt (include A-suffix variants)
-    const sluglineMatches = content.match(/^S#\s*\d+[A-Za-z]?\.\s*[^\n]+/gm) || [];
-    const extractedSlugs = sluglineMatches.map(s => s.replace(/^S#\s*\d+[A-Za-z]?\.\s*/, '').trim()).filter(Boolean);
+    const sluglineMatches = content.match(/^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.\s*[^\n]+/gm) || [];
+    const extractedSlugs = sluglineMatches.map(s => s.replace(/^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.\s*/, '').trim()).filter(Boolean);
     const updatedSlugs = [...(state.recentSlugs || []), ...extractedSlugs].slice(-8);
 
     // V148: dream scene tracking — count sleep/nightmare S# scene blocks (not keyword mentions)
@@ -875,6 +916,24 @@ function updateContextState(content: string, state: any) {
         }
     }
 
+    // V161: Track last time-of-day and last location from the final slug line in this chunk
+    const TIME_OF_DAY_ORDER = ['낮', '저녁', '밤', '새벽', '아침'];
+    let lastTimeOfDay = state.lastTimeOfDay || '';
+    let lastLocation = state.lastLocation || '';
+    if (sluglineMatches.length > 0) {
+        const lastSlug = sluglineMatches[sluglineMatches.length - 1];
+        const slugBody = lastSlug.replace(/^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.\s*/, '').trim();
+        // Extract time-of-day: last segment after final dash
+        const dashParts = slugBody.split('-');
+        const timePart = dashParts[dashParts.length - 1]?.trim() ?? '';
+        if (timePart && TIME_OF_DAY_ORDER.some(t => timePart.includes(t))) {
+            lastTimeOfDay = timePart;
+        }
+        // Extract base location: first segment before dash
+        const locPart = dashParts[0]?.replace(/^(INT|EXT|I|E)\.\s*/i, '').trim() ?? '';
+        if (locPart) lastLocation = locPart;
+    }
+
     return {
         ...state,
         lastAction: scrubMeta(lastAction).substring(0, 300),
@@ -882,7 +941,9 @@ function updateContextState(content: string, state: any) {
         lastThreeLines: lines.slice(-3).join('\n'),
         recentSlugs: updatedSlugs,
         dreamSceneCount: (state.dreamSceneCount ?? 0) + dreamBlocksInChunk,
-        protagonistPronouns: detectedPronoun
+        protagonistPronouns: detectedPronoun,
+        lastTimeOfDay,
+        lastLocation
     };
 }
 
@@ -1031,7 +1092,7 @@ function convertScenesJsonToScreenplay(scenes: any[]): string {
  */
 function extractSlugKey(rawSlug: string): string {
     // Remove "S# N." or "S# 13A." prefix (alpha suffix included)
-    const body = rawSlug.replace(/^S#\s*\d+[A-Za-z]?\.\s*/, '').trim();
+    const body = rawSlug.replace(/^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.\s*/, '').trim();
     // Match up to and including the time indicator (밤/낮/새벽/아침/오후/저녁/황혼/심야 etc.)
     const m = body.match(/^(?:INT|EXT)\..+?-\s*(?:밤|낮|새벽|이른\s*아침|아침|오후|저녁|황혼|심야|한낮|정오)/);
     return m ? m[0].trim() : body.split(/\s{2,}/)[0].trim();
@@ -1088,7 +1149,7 @@ ${script}`;
  */
 function detectConsecutiveSlugs(script: string): number {
     // Include optional alpha suffix (e.g. S# 13A.) so A-variants are counted as scene headers
-    const slugLines = script.match(/^S#\s*\d+[A-Za-z]?\.\s*.+/gm) || [];
+    const slugLines = script.match(/^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.\s*.+/gm) || [];
     const locations = slugLines.map(extractSlugKey);
     let violations = 0;
     let streak = 1;
@@ -1117,7 +1178,7 @@ function extractBaseLocation(rawSlug: string): string {
  * Catches battles/chases where V147 sub-location splits fool V145.
  */
 function detectBaseLocationStreak(script: string): number {
-    const slugLines = script.match(/^S#\s*\d+[A-Za-z]?\.\s*.+/gm) || [];
+    const slugLines = script.match(/^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.\s*.+/gm) || [];
     const bases = slugLines.map(extractBaseLocation);
     let violations = 0;
     let streak = 1;
@@ -1139,8 +1200,9 @@ function detectBaseLocationStreak(script: string): number {
  */
 function renumberScenes(script: string): string {
     let counter = 0;
-    // Match S# followed by digits with optional alpha or Korean suffix (e.g. 13A, 14B, 12계단) then a dot
-    return script.replace(/^(S#\s*)\d+[A-Za-z가-힣]?(\.\s*)/gm, (_, prefix, suffix) => {
+    // Match S# followed by digits with optional alpha/Korean suffix (e.g. 13A, 14B, 12계단, 23 계단) then a dot
+    // Handles both attached suffixes (23A, 23계단) and space-separated Korean words (23 계단)
+    return script.replace(/^(S#\s*)\d+(?:\s*[A-Za-z가-힣]+)?(\.\s*)/gm, (_, prefix, suffix) => {
         counter++;
         return `${prefix}${counter}${suffix}`;
     });
@@ -1152,7 +1214,7 @@ function renumberScenes(script: string): string {
  * transition beat as both a closing action and an opening action.
  */
 function removeDuplicateSceneTransitions(script: string): string {
-    const blocks = script.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim());
+    const blocks = script.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim());
     if (blocks.length < 2) return script;
 
     let removedTotal = 0;
@@ -1207,6 +1269,40 @@ function removeDuplicateSceneTransitions(script: string): string {
         console.log(`>>> [V157 Dup Remove] Total ${removedTotal} duplicate transition line(s) removed across script.`);
     }
     return result.join('');
+}
+
+/**
+ * V160: Fix unnumbered slug lines embedded in scene bodies.
+ * Detects lines like "EXT. 장소 - 시간" or "INT. 장소 - 시간" that are missing the "S# N." prefix
+ * and assigns them proper sequential scene numbers.
+ */
+function fixUnnumberedSlugs(script: string): string {
+    // Regex matches a slug-like line that does NOT start with S#
+    // Pattern: line starts with INT./EXT./I./E. followed by location - time
+    const unnumberedSlugRe = /^((?:INT|EXT|I|E)\.[ \t].+?-[ \t].+)$/gm;
+    const matches = [...script.matchAll(unnumberedSlugRe)];
+    if (matches.length === 0) return script;
+
+    let fixed = script;
+    let repaired = 0;
+    for (const m of matches) {
+        const line = m[1];
+        // Skip if already preceded by S# on the same line (shouldn't happen but be safe)
+        if (/S#\s*\d/.test(line)) continue;
+        // Find the last S# number before this position
+        const before = fixed.substring(0, fixed.indexOf(line));
+        const prevNums = [...before.matchAll(/^S#\s*(\d+)/gm)].map(x => parseInt(x[1], 10));
+        const lastNum = prevNums.length > 0 ? Math.max(...prevNums) : 0;
+        const newNum = lastNum + 1;
+        // Replace the bare slug line with a properly numbered one
+        fixed = fixed.replace(line, `S# ${newNum}. ${line}`);
+        repaired++;
+    }
+    if (repaired > 0) {
+        console.warn(`>>> [V160 Unnumbered Slug Fix] Assigned S# numbers to ${repaired} bare slug line(s).`);
+        fixed = renumberScenes(fixed);
+    }
+    return fixed;
 }
 
 /**
