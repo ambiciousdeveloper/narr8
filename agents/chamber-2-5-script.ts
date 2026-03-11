@@ -80,7 +80,7 @@ export class ScriptScribe {
             forbiddenBeats: [] as string[],
             lastSceneNumber: 0,
             recentSlugs: [] as string[],
-            dreamSceneUsed: false  // V148: 전체 대본에서 악몽/수면 씬 최대 1회 추적
+            dreamSceneCount: 0  // V148: 전체 대본에서 악몽/수면 씬 누적 카운트 (최대 2회 허용)
         };
 
         const beatChunk = Math.ceil(beats.length / actualSections);
@@ -235,6 +235,7 @@ Output the full expanded screenplay in Korean S# format.`;
                         const expandedText = expandResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
                         if (expandedText && expandedText.length > content.length) {
                             content = scrubMeta(expandedText);
+                            content = scrubInternalStatements(content); // V152
                         }
                     } else if (!content) {
                         console.warn(`>>> [V143 Skip] Chunk ${i + 1}: no content after retries. Running V144 mini-generation...`);
@@ -337,6 +338,9 @@ ${chunk}
         // V146: Renumber scenes sequentially to fix duplicates from Rule 6 splits
         fullScript = renumberScenes(fullScript);
 
+        // V152: Final internal-state scrub on assembled script
+        fullScript = scrubInternalStatements(fullScript);
+
         // V145 full-script check (cross-chunk violations) + V147 auto-fix
         const totalSlugViolations = detectConsecutiveSlugs(fullScript);
         if (totalSlugViolations > 0) {
@@ -385,7 +389,84 @@ function scrubMeta(text: string): string {
         .replace(/^.*대본.*:.*$/gm, "")
         .replace(/```json/gi, "")
         .replace(/```/g, "")
+        // V151: Replace English emotion/psychology words that slip into KO scripts
+        .replace(/\bfrustration\b/gi, '좌절감')
+        .replace(/\banxiety\b/gi, '불안감')
+        .replace(/\bdespair\b/gi, '절망감')
+        .replace(/\banger\b/gi, '분노')
+        .replace(/\bconfusion\b/gi, '혼란')
+        .replace(/\bguilt\b/gi, '죄책감')
+        .replace(/\bdread\b/gi, '공포감')
+        .replace(/\bpanic\b/gi, '공황')
+        .replace(/\brelief\b/gi, '안도감')
         .trim();
+}
+
+/**
+ * V152: Internal State Scrubber
+ * Removes action-line sentences that describe internal emotional/psychological state
+ * (forbidden in screenplays: cannot be filmed). Only scrubs action lines — dialogue preserved.
+ */
+const INTERNAL_STATE_PATTERNS: RegExp[] = [
+    /[^。\n]*마음속에[는은이가]?\s[^。\n]*/g,
+    /[^。\n]*내면을\s*들여다본다[^。\n]*/g,
+    /[^。\n]*내면에[는은]\s[^。\n]*/g,
+    /[^。\n]*내면이\s[^。\n]*/g,
+    /[^。\n]*불안감을\s*느낀다[^。\n]*/g,
+    /[^。\n]*불안과\s*혼란이\s*가득하다[^。\n]*/g,
+    /[^。\n]*혼란스러움이?\s[^。\n]*/g,
+    /[^。\n]*복잡한\s*감정[^。\n]*/g,
+    /[^。\n]*생각에\s*잠겼다[^。\n]*/g,
+    /[^。\n]*믿는다\s*$/,
+    /[^。\n]*알\s*수\s*있다\s*$/,
+];
+function scrubInternalStatements(text: string): string {
+    const lines = text.split('\n');
+    const result: string[] = [];
+    let prevWasCharName = false;
+
+    for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        const line = raw.trim();
+
+        // Slugline — always keep
+        if (/^S#\s*\d+/.test(line)) {
+            prevWasCharName = false;
+            result.push(raw);
+            continue;
+        }
+
+        // Character name line check (2–6 Korean chars, not an excluded time/place word)
+        const isCharName = /^[가-힣]{2,6}$/.test(line)
+            && !EXCLUDED_WORDS.has(line)
+            && !line.includes('.');
+        if (isCharName) {
+            prevWasCharName = true;
+            result.push(raw);
+            continue;
+        }
+
+        // Dialogue line (immediately after character name) — never scrub
+        if (prevWasCharName) {
+            prevWasCharName = false;
+            result.push(raw);
+            continue;
+        }
+        prevWasCharName = false;
+
+        // Action line — apply internal-state scrub
+        let cleaned = line;
+        for (const pattern of INTERNAL_STATE_PATTERNS) {
+            cleaned = cleaned.replace(pattern, '');
+        }
+        cleaned = cleaned.trim();
+
+        // Drop line if it became empty or a meaningless fragment after scrubbing
+        if (cleaned.length < 4) continue;
+        result.push(cleaned !== line ? cleaned : raw);
+    }
+
+    return result.join('\n');
 }
 
 /**
@@ -416,10 +497,11 @@ DO NOT submit another response without spoken dialogue.
 🚨 END ALERT 🚨
 ` : '';
 
-    // V148: Dream/sleep ban — if previous chunks already used a sleep/nightmare scene, forbid it here
-    const dreamBan = p.dreamSceneUsed ? `
+    // V148: Dream/sleep ban — if ≥2 sleep/nightmare scenes already used, ban completely; if 1, issue strong warning
+    const dreamCount = p.dreamSceneCount ?? 0;
+    const dreamBan = dreamCount >= 2 ? `
 ⛔ [DREAM/SLEEP BAN — ACTIVE — THIS OVERRIDES ALL STORY BEATS]
-This script already contains a sleep/nightmare/awakening scene. ONE is the HARD LIMIT for the entire script.
+This script already contains ${dreamCount} sleep/nightmare/awakening scene(s). TWO is the HARD LIMIT for the entire script.
 MANDATORY: Even if the [STORY BEATS] section below explicitly mentions sleeping, dreaming, or waking from a nightmare — you MUST IGNORE THAT BEAT and write the NEXT non-sleep beat instead.
 This ban takes ABSOLUTE PRIORITY over every story beat instruction below.
 FORBIDDEN in this section (zero exceptions):
@@ -429,6 +511,12 @@ FORBIDDEN in this section (zero exceptions):
   × Any "또 그 꿈" or flashback-dream hybrid
 If a beat is about sleeping or nightmares → SKIP IT ENTIRELY, move to the next action beat.
 ⛔ [END DREAM BAN]
+` : dreamCount >= 1 ? `
+⚠️ [DREAM/SLEEP WARNING — 1 of 2 allowed scenes already used]
+One sleep/nightmare scene has already been written. You have AT MOST ONE MORE allowed for the entire script.
+MANDATORY: If the beats include "falls asleep + nightmare + wakes up" — merge ALL into EXACTLY ONE scene. Do not split into multiple S# scenes.
+Do NOT write another full nightmare cycle (잠들다 → 악몽 → 깨어남) in this section.
+⚠️ [END WARNING]
 ` : '';
 
     const bp = p.blueprint || {};
@@ -482,6 +570,7 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 10. **INVENT DIALOGUE**: Screenwriters CREATE dialogue. Even when adapting prose with no dialogue, you MUST give characters voices. Invent lines that reveal character, advance plot, or react to the situation.
 11. **NO REPETITION**: Every scene MUST advance the story forward. If a scene does not change the situation, location, or character state compared to the previous scene — DO NOT write it. Merge or skip it. Writing the same hesitation, awakening, or action twice in two consecutive scenes is a CRITICAL ERROR.
     **SLEEP/DREAM HARD LIMIT**: If the beats include any combination of "falls asleep", "has nightmare", and "wakes up" — write ALL of this as EXACTLY ONE SCENE. Do NOT split the sleep cycle into 2, 3, or 4 separate S# scenes. Merge "잠들다 → 악몽 → 깨어남" into a SINGLE slugline. Maximum 1 sleep-related S# scene per section, regardless of how many beats reference it.
+    **NIGHTMARE CYCLE TOTAL LIMIT**: The ENTIRE script (all sections combined) may contain at most 2 sleep/nightmare/waking scenes. If your beats list multiple nightmare occurrences, select only the MOST DRAMATICALLY IMPORTANT ONE and skip the rest.
 12. **MULTI-CHARACTER SCENES**: Whenever the story beats involve 2+ characters, scenes MUST feature dialogue exchanges between them — not solo monologue. A character talking only to themselves when other characters are present is an error.
 13. **SOLO SCENE RULE**: When a character is genuinely alone:
     (a) Limit spoken self-talk to MAXIMUM 2 short lines per scene.
@@ -494,6 +583,7 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
     (c) BATTLE/ACTION: Fight sequences are especially prone to location clumping. After 3 combat scenes in the same area, MOVE to a completely different location — rooftop, building interior, nearby plaza, etc.
 15. **LOCATION TRANSITION**: Whenever the story moves from one distinct location to another (e.g., alley → school, point-A → point-B), you MUST include a brief transition beat showing the character LEAVING or ARRIVING. Never cut directly between two very different locations without a bridging line. Example: one action line + one dialogue is sufficient.
 16. **SCENE COMPLETION**: Every scene you start MUST be fully written before moving to the next. Never end a scene mid-action or mid-dialogue. An incomplete final scene is worse than writing one fewer scene.
+17. **RESOLVED CONFLICT RULE**: Once a conflict is explicitly RESOLVED within the episode (a character overcomes a fear, thanks someone for curing a problem, leaves smiling), do NOT reintroduce the SAME conflict again later in the same episode without a clear narrative justification (e.g., a time-skip, a new cause, or a plot twist that makes sense). Repeating a conflict that was already resolved is a story continuity error. Example: if nightmares are cured in scene 16, scene 17 must NOT show the same character waking from the same nightmares.
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
@@ -560,9 +650,13 @@ function updateContextState(content: string, state: any) {
     const extractedSlugs = sluglineMatches.map(s => s.replace(/^S#\s*\d+\.\s*/, '').trim()).filter(Boolean);
     const updatedSlugs = [...(state.recentSlugs || []), ...extractedSlugs].slice(-8);
 
-    // V148: dream scene tracking — once used across the full script, ban in subsequent chunks
+    // V148: dream scene tracking — count sleep/nightmare S# scene blocks (not keyword mentions)
     const DREAM_DETECT = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자', '자리에 누워'];
-    const hasDreamScene = DREAM_DETECT.some(kw => content.includes(kw));
+    // Count how many S# scene blocks in this chunk contain dream/sleep content
+    const sceneBlocks = content.split(/(?=^S#\s*\d+)/m).filter(b => b.trim());
+    const dreamBlocksInChunk = sceneBlocks.filter(b =>
+        DREAM_DETECT.some(kw => b.includes(kw))
+    ).length;
 
     return {
         ...state,
@@ -570,7 +664,7 @@ function updateContextState(content: string, state: any) {
         lastSceneNumber: lastScene,
         lastThreeLines: lines.slice(-3).join('\n'),
         recentSlugs: updatedSlugs,
-        dreamSceneUsed: (state.dreamSceneUsed || hasDreamScene)
+        dreamSceneCount: (state.dreamSceneCount ?? 0) + dreamBlocksInChunk
     };
 }
 
@@ -793,7 +887,7 @@ function detectConsecutiveSlugs(script: string): number {
  * V149: Extracts the BASE location name, stripping sub-location suffixes added by V147.
  * Example: "EXT. 낡은 골목길 초입 - 새벽" → "EXT. 낡은 골목길 - 새벽"
  */
-const BASE_LOC_SUFFIXES = /\s+(입구|중앙|안쪽|한쪽|끝|구석|옆길|뒤쪽|정문\s*앞|창가|복도|계단|세면대\s*앞|문\s*앞|초입|막다른\s*길|부상|연기\s*속|책상\s*앞)(?=\s*-)/u;
+const BASE_LOC_SUFFIXES = /\s+(입구|중앙|안쪽|한쪽|끝|구석|옆길|뒤쪽|정문\s*앞|창가|복도|계단|세면대\s*앞|문\s*앞|초입|막다른\s*길|부상|연기\s*속|책상\s*앞|가로등\s*아래|담벼락\s*앞|담벼락|골목\s*안쪽|골목\s*입구|골목\s*끝|침대\s*옆|침대\s*앞|냉장고\s*앞|현관\s*앞|현관|명상\s*중|창문\s*앞|바닥|지하|2층|3층|옥상|뒷골목|골목\s*어귀)(?=\s*-)/u;
 function extractBaseLocation(rawSlug: string): string {
     return extractSlugKey(rawSlug).replace(BASE_LOC_SUFFIXES, '').trim();
 }
