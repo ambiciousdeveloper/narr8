@@ -79,7 +79,8 @@ export class ScriptScribe {
             lastThreeLines: "",
             forbiddenBeats: [] as string[],
             lastSceneNumber: 0,
-            recentSlugs: [] as string[]
+            recentSlugs: [] as string[],
+            dreamSceneUsed: false  // V148: 전체 대본에서 악몽/수면 씬 최대 1회 추적
         };
 
         const beatChunk = Math.ceil(beats.length / actualSections);
@@ -323,10 +324,11 @@ ${chunk}
         // V146: Renumber scenes sequentially to fix duplicates from Rule 6 splits
         fullScript = renumberScenes(fullScript);
 
-        // V145 full-script check (cross-chunk violations)
+        // V145 full-script check (cross-chunk violations) + V147 auto-fix
         const totalSlugViolations = detectConsecutiveSlugs(fullScript);
         if (totalSlugViolations > 0) {
-            console.warn(`>>> [V145 Full-Script Slug Check] ${totalSlugViolations} location(s) appear 3+ times consecutively across full script.`);
+            console.warn(`>>> [V145 Full-Script Slug Check] ${totalSlugViolations} location(s) appear 3+ times consecutively across full script. Running V147 cross-chunk fix...`);
+            fullScript = await fixSlugViolations(fullScript, model, 0);
         } else {
             console.log(`>>> [V145 Full-Script Slug Check] OK — no consecutive slug violations.`);
         }
@@ -392,6 +394,19 @@ DO NOT submit another response without spoken dialogue.
 🚨 END ALERT 🚨
 ` : '';
 
+    // V148: Dream/sleep ban — if previous chunks already used a sleep/nightmare scene, forbid it here
+    const dreamBan = p.dreamSceneUsed ? `
+⛔ [DREAM/SLEEP BAN — ACTIVE]
+This script already contains a sleep, nightmare, or awakening scene in a previous section.
+YOU ARE ABSOLUTELY FORBIDDEN from writing ANY of the following in this section:
+- A character falling asleep or lying in bed
+- A nightmare or dream sequence
+- A character waking up from a bad dream (sweating, gasping, etc.)
+- Any "꿈", "악몽", "잠들", "수면", "잠에서 깨", "또 그 꿈" scene
+If the story beats seem to call for such a scene, SKIP IT and jump to the next story event.
+⛔ [END DREAM BAN]
+` : '';
+
     const bp = p.blueprint || {};
     const bpRules = bp.world_bible?.rules_kr || "";
     const bpGlossary = bp.glossary ? JSON.stringify(bp.glossary).substring(0, 1000) : "";
@@ -402,7 +417,7 @@ DO NOT submit another response without spoken dialogue.
 [ROLE]
 Professional Script Adaptor.
 Convert PROSE into a high-density, visual SCREENPLAY in **${langLabel}** ONLY.
-${dialogueAlert}${personaBlock}
+${dreamBan}${dialogueAlert}${personaBlock}
 [GOLDEN FORMAT SAMPLE — 2-character exchange (this is the standard)]
 S# 10. INT. 낡은 무도장 - 밤
 먼지 쌓인 매트리스 위로 달빛이 스며든다.
@@ -440,8 +455,13 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 11. **NO REPETITION**: Every scene MUST advance the story forward. If a scene does not change the situation, location, or character state compared to the previous scene — DO NOT write it. Merge or skip it. Writing the same hesitation, awakening, or action twice in two consecutive scenes is a CRITICAL ERROR. Sleep/dream/waking scenes are especially prone to repetition — write at most ONE such scene per section.
 14. **LOCATION VARIETY**: Do NOT write more than 2 consecutive scenes at the exact same slugline (same place AND same time of day). If action continues, use CUT TO, move to a different sub-location, or shift the time indicator (e.g., 밤 → 새벽). Three or more scenes with the identical slugline in a row is a formatting error.
 12. **MULTI-CHARACTER SCENES**: Whenever the story beats involve 2+ characters, scenes MUST feature dialogue exchanges between them — not solo monologue. A character talking only to themselves when other characters are present is an error.
-13. **SOLO MONOLOGUE LIMIT**: If a character is genuinely alone, limit self-talk to 2 lines per scene. Fill remaining dialogue requirement with physical actions, ambient sounds, or reactive behaviour.
+13. **SOLO SCENE RULE**: When a character is genuinely alone:
+    (a) Limit spoken self-talk to MAXIMUM 2 short lines per scene.
+    (b) Fill the scene with: physical actions (문을 박찬다, 주먹을 쥔다, 사진을 뒤집는다), ambient sounds (발소리, 빗소리, 전화벨), environmental changes (바람이 창문을 흔든다, 가로등이 깜박인다).
+    (c) Inner reflection must be expressed through a PHYSICAL OBJECT or ACTION — never as a spoken thought. Example: instead of "내가 왜 이렇게 됐지?" → character picks up a photo, stares at it, then puts it face-down.
+    (d) After MAXIMUM 3 consecutive scenes with the same character alone, you MUST introduce another character (even briefly — a knock, a call, a passer-by).
 15. **SCENE COMPLETION**: Every scene you start MUST be fully written before moving to the next. Never end a scene mid-action or mid-dialogue. Complete the current scene's action-dialogue arc even if you are near the target character count. An incomplete final scene is worse than writing one fewer scene.
+16. **LOCATION TRANSITION**: Whenever the story moves from one distinct location to another (e.g., alley → school, apartment → street), you MUST write a brief transition scene (1-3 lines + 1 dialogue) showing the character LEAVING the old location or ARRIVING at the new one. Never cut directly between two very different locations without a bridging action or dialogue line.
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
@@ -508,12 +528,17 @@ function updateContextState(content: string, state: any) {
     const extractedSlugs = sluglineMatches.map(s => s.replace(/^S#\s*\d+\.\s*/, '').trim()).filter(Boolean);
     const updatedSlugs = [...(state.recentSlugs || []), ...extractedSlugs].slice(-8);
 
+    // V148: dream scene tracking — once used across the full script, ban in subsequent chunks
+    const DREAM_DETECT = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자', '자리에 누워'];
+    const hasDreamScene = DREAM_DETECT.some(kw => content.includes(kw));
+
     return {
         ...state,
         lastAction: scrubMeta(lastAction).substring(0, 300),
         lastSceneNumber: lastScene,
         lastThreeLines: lines.slice(-3).join('\n'),
-        recentSlugs: updatedSlugs
+        recentSlugs: updatedSlugs,
+        dreamSceneUsed: (state.dreamSceneUsed || hasDreamScene)
     };
 }
 
@@ -694,9 +719,11 @@ async function fixSlugViolations(script: string, model: any, chunkNum: number): 
 ${script}`;
 
     try {
+        // Full-script fix needs more tokens than per-chunk fix
+        const fixTokens = script.length > 6000 ? 24000 : 12000;
         const result = await model.generateContent({
             contents: [{ role: 'user', parts: [{ text: fixPrompt }] }],
-            generationConfig: { temperature: 0.3, maxOutputTokens: 10000 }
+            generationConfig: { temperature: 0.3, maxOutputTokens: fixTokens }
         });
         const fixed = result.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
         if (fixed && fixed.length > script.length * 0.9) {
