@@ -345,35 +345,28 @@ ${chunk}
                         // false positives from action words like '꿈틀거리다', '꿈결' etc.
                         const DREAM_DETECT_V153 = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자리', '침대', '누워'];
                         const chunkBlocks = content.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim());
-                        // Extract only header + stage directions (non-dialogue lines) for detection
+                        // Shared inline-format dialogue detector: "이름 대사내용" on one line.
+                        // Matches 2-6 Korean chars (name) followed by space and at least one more char.
+                        // Used by both per-chunk and full-script dream detection.
+                        const isInlineDialogueLine = (t: string): boolean =>
+                            /^[가-힣]{2,6}\s+\S/.test(t) && !EXCLUDED_WORDS.has(t.split(/\s/)[0] ?? '');
                         function isDreamSceneBlock(block: string): boolean {
                             const lines = block.split('\n');
-                            // Fast-path: check slug line directly for dream marker (e.g. "INT. 천도당 - 꿈")
+                            // Fast-path: slug line ends with "- 꿈" marker
                             const slugLine = lines.find(l => /^S#\s*\d/.test(l.trim()));
-                            if (slugLine && /[-\s]꿈(\s|$)/i.test(slugLine)) return true;
-                            // Collect slug + stage-direction lines only (skip character name lines AND their following dialogue lines).
-                            // A character name line: 2-6 Korean chars only, no punctuation, not a slug/place/time keyword.
-                            const directionLines: string[] = [];
-                            let skipNext = false; // true = next non-empty line is spoken dialogue, skip it
+                            if (slugLine && /[-–]\s*꿈\s*$/i.test(slugLine)) return true;
+                            // Scan slug + first 4 pure action lines only.
+                            // Exclude: inline dialogue ("이름 대사"), slug lines (already scanned).
+                            const actionLines: string[] = [];
                             for (const line of lines) {
-                                if (directionLines.length >= 5) break;
+                                if (actionLines.length >= 4) break;
                                 const trimmed = line.trim();
                                 if (!trimmed) continue;
-                                if (skipNext) {
-                                    skipNext = false;
-                                    continue; // spoken dialogue line — skip
-                                }
-                                // Detect character name lines: exactly 2-6 Korean chars, no spaces/punctuation
-                                const isCharName = /^[가-힣]{2,6}$/.test(trimmed)
-                                    && !EXCLUDED_WORDS.has(trimmed)
-                                    && !trimmed.includes('.');
-                                if (isCharName) {
-                                    skipNext = true; // next non-empty line is the spoken line
-                                    continue;
-                                }
-                                directionLines.push(trimmed);
+                                if (/^S#\s*\d/.test(trimmed)) continue;      // slug — skip (already scanned)
+                                if (isInlineDialogueLine(trimmed)) continue; // inline dialogue — skip
+                                actionLines.push(trimmed);
                             }
-                            const scanText = directionLines.join(' ');
+                            const scanText = actionLines.join(' ');
                             return DREAM_DETECT_V153.some(kw => scanText.includes(kw));
                         }
                         let dreamBlocks = chunkBlocks.filter(isDreamSceneBlock);
@@ -484,8 +477,8 @@ ${content}`;
         // V163: Strip action/event words from slugline sub-location tokens (깨어남, 대치, 몸싸움 etc.)
         fullScript = stripActionWordsFromSlugs(fullScript);
 
-        // V152: Final internal-state scrub on assembled script
-        fullScript = scrubInternalStatements(fullScript);
+        // V152: Final internal-state scrub on assembled script (AI pass + regex fallback)
+        fullScript = await scrubInternalStatements(fullScript, model);
 
         // V145 full-script check (cross-chunk violations) + V147 auto-fix
         const totalSlugViolations = detectConsecutiveSlugs(fullScript);
@@ -497,12 +490,23 @@ ${content}`;
         }
 
         // V149 full-script base location streak check
-        const totalBaseViolations = detectBaseLocationStreak(fullScript);
-        if (totalBaseViolations > 0) {
-            console.warn(`>>> [V149 Full-Script Base Slug Check] ${totalBaseViolations} base location(s) appear ${BASE_STREAK_LIMIT}+ times consecutively. Running fix...`);
-            fullScript = await fixSlugViolations(fullScript, model, 0);
-        } else {
-            console.log(`>>> [V149 Full-Script Base Slug Check] OK.`);
+        // Uses fixBaseLocationViolations (NOT fixSlugViolations) — the V149 fix must change actual
+        // place names, not just add sub-suffixes, because detectBaseLocationStreak strips suffixes.
+        {
+            const totalBaseViolations = detectBaseLocationStreak(fullScript);
+            if (totalBaseViolations > 0) {
+                console.warn(`>>> [V149 Full-Script Base Slug Check] ${totalBaseViolations} base location(s) appear ${BASE_STREAK_LIMIT}+ times consecutively. Running V149 fix...`);
+                fullScript = await fixBaseLocationViolations(fullScript, model);
+                // Re-verify with the same metric used for detection (detectBaseLocationStreak)
+                const afterFix = detectBaseLocationStreak(fullScript);
+                if (afterFix > 0) {
+                    console.warn(`>>> [V149 Full-Script Base Slug Check] ${afterFix} violation(s) remain after fix.`);
+                } else {
+                    console.log(`>>> [V149 Full-Script Base Slug Check] All violations resolved.`);
+                }
+            } else {
+                console.log(`>>> [V149 Full-Script Base Slug Check] OK.`);
+            }
         }
 
         // V153 Full-Script Dream Total Cap: max 2 dream/nightmare scenes across the entire script.
@@ -512,14 +516,24 @@ ${content}`;
             const DREAM_DETECT_FULL = ['악몽', '잠들', '잠에서', '꿈에서', '꿈을 꾸', '수면', '잠꼬대', '잠자리', '침대', '누워'];
             const FULL_DREAM_MAX = 2;
             const allBlocks = fullScript.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim());
+            // Inline dialogue detector (mirrors per-chunk isDreamSceneBlock logic)
+            const isInlineDial = (t: string): boolean =>
+                /^[가-힣]{2,6}\s+\S/.test(t) && !['새벽','아침','밤','낮','저녁','오전','오후','실내','실외','골목','거리','현재','과거','회상'].includes(t.split(/\s/)[0] ?? '');
             const isDream = (block: string) => {
                 const lines = block.split('\n');
                 const slugLine = lines[0] ?? '';
-                // Slug fast-path: slugline ending in - 꿈
+                // Slug fast-path: slugline ending in "- 꿈"
                 if (/[-–]\s*꿈\s*$/.test(slugLine)) return true;
-                // Scan first 4 stage-direction lines (skip dialogue)
-                const dirLines = lines.slice(1).filter(l => l.trim() && !/^[가-힣A-Za-z\s]+\s/.test(l.trim()) || l.trim().length < 30).slice(0, 4);
-                return DREAM_DETECT_FULL.some(kw => (slugLine + ' ' + dirLines.join(' ')).includes(kw));
+                // Scan first 4 pure action lines only — exclude inline dialogue to avoid false positives
+                // from characters MENTIONING dreams in conversation ("악몽을 꿨어" etc.)
+                const actionLines = lines.slice(1).filter(l => {
+                    const t = l.trim();
+                    if (!t) return false;
+                    if (/^S#\s*\d/.test(t)) return false;  // nested slug — skip
+                    if (isInlineDial(t)) return false;       // inline dialogue — skip
+                    return true;
+                }).slice(0, 4);
+                return DREAM_DETECT_FULL.some(kw => (slugLine + ' ' + actionLines.join(' ')).includes(kw));
             };
             const dreamBlocks = allBlocks.filter(isDream);
             if (dreamBlocks.length > FULL_DREAM_MAX) {
@@ -533,6 +547,21 @@ ${content}`;
                 console.warn(`>>> [V153 Full-Script Dream Cap] Removed ${dreamBlocks.length - FULL_DREAM_MAX} excess dream scene(s). Renumbered.`);
             } else {
                 console.log(`>>> [V153 Full-Script Dream Cap] OK (${dreamBlocks.length}/${FULL_DREAM_MAX} dream scene(s)).`);
+            }
+        }
+
+        // ── Final Verification Summary ─────────────────────────────────────────────
+        // Runs after ALL post-processing passes. Reports any remaining violations
+        // without triggering further fixes (prevents infinite fix loop).
+        // A non-zero count here means a fix pass was ineffective — useful for debugging.
+        {
+            const finalV145 = detectConsecutiveSlugs(fullScript);
+            const finalV149 = detectBaseLocationStreak(fullScript);
+            const finalScenes = (fullScript.match(/^S#\s*\d+/gm) || []).length;
+            if (finalV145 > 0 || finalV149 > 0) {
+                console.warn(`>>> [Final Verify] ⚠ Remaining violations — V145(exact): ${finalV145}, V149(base): ${finalV149}. Total scenes: ${finalScenes}.`);
+            } else {
+                console.log(`>>> [Final Verify] ✓ All slug/location rules satisfied. Total scenes: ${finalScenes}.`);
             }
         }
 
@@ -584,9 +613,17 @@ function scrubMeta(text: string): string {
 
 /**
  * V152: Internal State Scrubber
- * Removes action-line sentences that describe internal emotional/psychological state
- * (forbidden in screenplays: cannot be filmed). Only scrubs action lines — dialogue preserved.
+ * Primary: AI scrub pass — catches any phrasing AI generates (open-ended).
+ * Fallback: regex pattern list — runs only if AI call fails or output is too short.
+ *
+ * Design rationale: 100+ regex patterns only ever cover observed patterns.
+ * AI generates new internal-state phrasings every run, so an AI pass is the only
+ * approach that can keep pace without requiring constant manual updates.
  */
+
+// ── V152 Fallback regex patterns ─────────────────────────────────────────────
+// These run ONLY when the AI scrub pass fails. They cover common patterns as a
+// safety net. Do NOT continue adding new entries here — extend the AI prompt instead.
 const INTERNAL_STATE_PATTERNS: RegExp[] = [
     /[^。\n]*마음속에[는은이가]?\s[^。\n]*/g,
     /[^。\n]*내면을\s*들여다본다[^。\n]*/g,
@@ -690,53 +727,83 @@ const INTERNAL_STATE_PATTERNS: RegExp[] = [
     /[^。\n]*마지막\s*힘을\s*짜[내냈][^。\n]*/g,
     /[^。\n]*자책하[지지]\s*마[^。\n]*/g,
 ];
-function scrubInternalStatements(text: string): string {
+/**
+ * V152 Fallback: regex-based scrub applied when AI pass is unavailable or failed.
+ * Handles the actual screenplay inline format ("이름 대사" on one line).
+ */
+function scrubInternalStatementsFallback(text: string): string {
     const lines = text.split('\n');
     const result: string[] = [];
-    let prevWasCharName = false;
+    // Inline dialogue detector — mirrors isDreamSceneBlock logic
+    const isInlineDial = (t: string) =>
+        /^[가-힣]{2,6}\s+\S/.test(t) && !EXCLUDED_WORDS.has(t.split(/\s/)[0] ?? '');
 
-    for (let i = 0; i < lines.length; i++) {
-        const raw = lines[i];
+    for (const raw of lines) {
         const line = raw.trim();
-
-        // Slugline — always keep
-        if (/^S#\s*\d+/.test(line)) {
-            prevWasCharName = false;
+        // Always keep sluglines and inline dialogue untouched
+        if (/^S#\s*\d+/.test(line) || isInlineDial(line)) {
             result.push(raw);
             continue;
         }
-
-        // Character name line check (2–6 Korean chars, not an excluded time/place word)
-        const isCharName = /^[가-힣]{2,6}$/.test(line)
-            && !EXCLUDED_WORDS.has(line)
-            && !line.includes('.');
-        if (isCharName) {
-            prevWasCharName = true;
-            result.push(raw);
-            continue;
-        }
-
-        // Dialogue line (immediately after character name) — never scrub
-        if (prevWasCharName) {
-            prevWasCharName = false;
-            result.push(raw);
-            continue;
-        }
-        prevWasCharName = false;
-
-        // Action line — apply internal-state scrub
+        // Action line — apply regex scrub
         let cleaned = line;
         for (const pattern of INTERNAL_STATE_PATTERNS) {
             cleaned = cleaned.replace(pattern, '');
         }
         cleaned = cleaned.trim();
-
-        // Drop line if it became empty or a meaningless fragment after scrubbing
         if (cleaned.length < 4) continue;
         result.push(cleaned !== line ? cleaned : raw);
     }
-
     return result.join('\n');
+}
+
+/**
+ * V152 Primary: AI-based internal-state scrub pass.
+ * Sends the assembled script to the model and asks it to remove all
+ * content that cannot be filmed (internal state, past tense, narrator intrusion).
+ * Falls back to regex scrub if the AI call fails or output is suspiciously short.
+ */
+async function scrubInternalStatements(text: string, model: any): Promise<string> {
+    const scrubPrompt = `다음 한국어 시나리오 대본에서 카메라로 촬영 불가능한 내용만 지문(action line)에서 삭제하세요.
+
+삭제 대상 — 지문에서만 해당 (대사는 절대 수정 금지):
+1. 감정·심리 내면 묘사: "마음속에", "내면에", "불안감을 느낀다", "결심한다", "두려움이 밀려온다", "직감한다"
+2. 과거형 시제: "~했다", "~았다/었다", "~ㅆ다" (지문은 반드시 현재형)
+3. 소설체 수사: "마치 ~처럼", "~인 듯한", 직유·은유 표현
+4. 서술자 개입: "~일까?", "~할 것이다", 독자에게 묻거나 미래를 단정하는 문장
+5. 운명·관조 서술: "운명", "삶의 고단함", "희망과 절망이 교차", "고독은 깊어"
+
+절대 삭제 금지:
+- S# N. INT/EXT. 장소 - 시간 형식의 슬러그라인
+- 인라인 대사 ("이름 대사내용" 형식의 줄 전체)
+- 카메라에 보이는 행동 묘사 ("걷는다", "꺼낸다", "돌아본다", "주먹을 쥔다")
+
+삭제된 문장이 있다면 앞뒤 지문이 자연스럽게 이어지도록 유지하세요.
+수정된 대본 전체를 그대로 출력하세요. 설명·주석 없이.
+
+대본:
+${text}`;
+
+    try {
+        const result = await generateWithRetry(model, {
+            contents: [{ role: 'user', parts: [{ text: scrubPrompt }] }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 24000 }
+        }, 'V152 AI scrub pass');
+        const scrubbed = result.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+        // Accept if output is ≥80% of original (prevents AI from over-trimming)
+        if (scrubbed && scrubbed.length >= text.length * 0.80) {
+            const removedChars = text.length - scrubbed.length;
+            console.log(`>>> [V152 AI Scrub] Done. Removed ~${removedChars} chars of internal-state content.`);
+            return scrubbed;
+        }
+        console.warn(`>>> [V152 AI Scrub] Output too short (${scrubbed.length}/${text.length}). Falling back to regex scrub.`);
+    } catch (e) {
+        console.warn(`>>> [V152 AI Scrub] Error — ${e}. Falling back to regex scrub.`);
+    }
+    // Fallback: regex-based scrub
+    const fallbackResult = scrubInternalStatementsFallback(text);
+    console.log(`>>> [V152 Fallback Scrub] Regex scrub applied.`);
+    return fallbackResult;
 }
 
 /**
@@ -1230,6 +1297,54 @@ ${script}`;
 }
 
 /**
+ * V149 전용 Fix: 동일 베이스 장소가 BASE_STREAK_LIMIT번 이상 연속될 때 호출.
+ * V147(fixSlugViolations)과 달리, 서브 suffix 추가가 아닌 장소명 자체를 인접 다른 장소로
+ * 변경하도록 AI에게 지시한다. fix 후 detectBaseLocationStreak으로 잔류를 재확인한다.
+ *
+ * 설계 이유:
+ *  - V147은 "서울 골목 입구 / 안쪽 / 끝"처럼 suffix를 추가 → detectConsecutiveSlugs(완전 일치)에서는 0이지만
+ *    detectBaseLocationStreak(베이스 비교)에서는 여전히 "서울 골목" 3연속으로 감지됨.
+ *  - 따라서 V149 위반은 베이스 장소를 실질적으로 다른 장소로 교체해야만 해결됨.
+ */
+async function fixBaseLocationViolations(script: string, model: any): Promise<string> {
+    const fixPrompt = `아래 한국어 대본에서 동일한 넓은 지역(예: "서울 골목", "허름한 방", "훈련장")이 3개 이상 씬에서 연속으로 사용되어 있습니다.
+이 경우 서브 위치 접미사(입구/안쪽/끝)를 추가하는 것만으로는 부족합니다. 연속된 씬 중 하나 이상의 장소를 실제로 다른 인접 장소로 변경하세요.
+
+규칙:
+1. S# 번호는 절대 변경하지 마세요.
+2. 씬 헤더(S# N. 부분)만 수정. 액션/대사 내용은 절대 변경 금지.
+3. 장소를 변경할 때는 씬 내 실제 행동·공간 묘사와 일치하는 인접 장소로 바꾸세요.
+   예) "서울 골목" 3연속 → 중간 씬을 "EXT. 서울 거리 모퉁이" 또는 "EXT. 버려진 건물 앞"으로 변경
+   예) "허름한 방" 3연속 → 한 씬을 "INT. 허름한 방 복도" 또는 "INT. 건물 계단"으로 변경
+   예) "신성학원 훈련장" 3연속 → 한 씬을 "INT. 신성학원 복도" 또는 "EXT. 신성학원 운동장"으로 변경
+4. 변경 후 동일 베이스 장소(넓은 지역)가 연속 3번 이상 등장하지 않도록 확인하세요.
+5. 한국어로만 작성. 수정된 대본 전체를 그대로 출력하세요. 설명 없이.
+6. ⚠️ 씬 헤더에 행동 묘사 단어를 절대 포함하지 마세요. 헤더는 오직 장소명 + 시간대만 포함.
+
+대본:
+${script}`;
+
+    try {
+        const fixTokens = script.length > 6000 ? 24000 : 12000;
+        const result = await generateWithRetry(model, {
+            contents: [{ role: 'user', parts: [{ text: fixPrompt }] }],
+            generationConfig: { temperature: 0.3, maxOutputTokens: fixTokens }
+        }, 'V149 base-location fix');
+        const fixed = result.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+        if (fixed && fixed.length > script.length * 0.85) {
+            const remaining = detectBaseLocationStreak(fixed);
+            const remainingExact = detectConsecutiveSlugs(fixed);
+            console.warn(`>>> [V149 Base Fix] Done. Remaining base violations: ${remaining}, exact violations: ${remainingExact}`);
+            return fixed;
+        }
+        console.warn(`>>> [V149 Base Fix] Output too short (${result.response.text().length}/${script.length}), keeping original.`);
+    } catch (e) {
+        console.warn(`>>> [V149 Base Fix] Error — ${e}.`);
+    }
+    return script;
+}
+
+/**
  * V145: Detects how many distinct locations appear 3+ times consecutively in a script.
  * Returns the count of such violations for logging purposes.
  */
@@ -1257,7 +1372,14 @@ function detectConsecutiveSlugs(script: string): number {
 // V149 BASE_LOC_SUFFIXES: strips sub-location tokens appearing BEFORE the "- 시간대" dash.
 // CRITICAL: Do NOT include actual location names (뒷골목, 골목, 거리 are PLACES not suffixes).
 // Only list words that describe a sub-area WITHIN a larger named location.
-const BASE_LOC_SUFFIXES = /\s+(입구|출구|중앙|중간|한가운데|안쪽|한쪽|끝|구석|옆길|뒤쪽|위|아래|강변|강가|강위|산위|산아래|정문\s*앞|창가|복도|계단|세면대\s*앞|문\s*앞|초입|막다른\s*길|연기\s*속|어둠\s*속|책상\s*앞|가로등\s*아래|담벼락\s*앞|담벼락|침대\s*옆|침대\s*앞|냉장고\s*앞|현관\s*앞|현관|명상\s*중|창문\s*앞|바닥|지하|2층|3층|옥상|골목\s*안쪽|골목\s*입구|골목\s*끝|골목\s*어귀|어귀|한복판|전투|결투|격전지|추격|거울\s*앞|깨어남|마주침|대립|대치|몸싸움|충돌|도주|추적|탈출|은신|잠복|운명의\s*시작)(?=\s*-)/u;
+// V149 BASE_LOC_SUFFIXES: sub-area tokens that appear BEFORE "- 시간대" within a slugline.
+// Rules:
+//  1. Only include words that describe a sub-area WITHIN a larger named place (e.g. "중앙", "입구").
+//  2. Do NOT include compound tokens like "골목 입구" — "입구" alone already handles
+//     "서울 골목 입구" correctly (strips " 입구" → "서울 골목"), while "골목 입구" would
+//     over-strip, making "서울 골목 입구" → "서울" (wrong base).
+//  3. Action/event words are listed in SLUG_ACTION_WORDS (V163) and must NOT appear here.
+const BASE_LOC_SUFFIXES = /\s+(입구|출구|중앙|중간|한가운데|안쪽|한쪽|끝|구석|옆길|뒤쪽|위|아래|강변|강가|강위|산위|산아래|정문\s*앞|창가|복도|계단|세면대\s*앞|문\s*앞|초입|막다른\s*길|연기\s*속|어둠\s*속|책상\s*앞|가로등\s*아래|담벼락\s*앞|담벼락|침대\s*옆|침대\s*앞|냉장고\s*앞|현관\s*앞|현관|명상\s*중|창문\s*앞|바닥|지하|2층|3층|옥상|어귀|한복판|거울\s*앞)(?=\s*-)/u;
 function extractBaseLocation(rawSlug: string): string {
     return extractSlugKey(rawSlug).replace(BASE_LOC_SUFFIXES, '').trim();
 }
@@ -1410,15 +1532,20 @@ function fixSlugTimeOfDay(script: string): string {
                 return newSlug;
             }
 
-            // Looks like a sub-location rather than time (e.g. "계단", "복도", "입구") —
-            // Move the sub-location token into the place name and append correct time.
-            // This avoids double-dash: "PLACE - 계단" → "PLACE 계단 - 시간대"  (NOT "PLACE - 계단 - 시간대")
+            // Looks like a sub-location or action word used as time (e.g. "계단", "복도", "전투") —
+            // Integrated V163 logic: if the token is an action word, drop it entirely (don't move to place).
+            // Otherwise move it into the place-name part and append correct time.
+            // This avoids double-dash AND eliminates the separate V163 pass for this specific case.
             const isSubLoc = /^[가-힣\s]{1,10}$/.test(timePart) && !VALID_TIMES.some(t => timePart.includes(t));
             if (isSubLoc) {
                 fixed++;
-                const placeBase = slugLine.substring(0, dashIdx).trimEnd(); // everything before the dash
-                const newSlug = `${placeBase} ${timePart} - ${lastValidTime}`;
-                console.warn(`>>> [V162 Slug Time Fix] Sub-loc-as-time "${timePart}" → moved to place: ${newSlug.trim()}`);
+                const placeBase = slugLine.substring(0, dashIdx).trimEnd();
+                // Check if the token is an action/event word — if so, just drop it (don't pollute the place name)
+                const isActionWord = SLUG_ACTION_WORDS_SET.has(timePart.trim());
+                const newSlug = isActionWord
+                    ? `${placeBase} - ${lastValidTime}`                   // drop action word
+                    : `${placeBase} ${timePart} - ${lastValidTime}`;      // move sub-loc to place name
+                console.warn(`>>> [V162 Slug Time Fix] Sub-loc-as-time "${timePart}" (${isActionWord ? 'action word — dropped' : 'sub-loc — moved'}) → ${newSlug.trim()}`);
                 return newSlug;
             }
 
@@ -1441,6 +1568,8 @@ function fixSlugTimeOfDay(script: string): string {
  * They must appear in action lines, not sluglines.
  */
 const SLUG_ACTION_WORDS = /\s+(깨어남|마주침|대립|대치|몸싸움|충돌|도주|추적|탈출|은신|잠복|운명의\s*시작|어둠\s*속|격전|전투|결투|추격|격전지|긴장|위기|위험|절정|전야|결전|각성|발동|변신|폭발|충격|맞닥뜨림|발각|침투|잠입|대결|비밀|고백|위협|협박|습격|매복|기습)(?=\s*-)/gu;
+// Set version for O(1) lookup inside V162 isSubLoc branch
+const SLUG_ACTION_WORDS_SET = new Set(['깨어남','마주침','대립','대치','몸싸움','충돌','도주','추적','탈출','은신','잠복','운명의 시작','어둠 속','격전','전투','결투','추격','격전지','긴장','위기','위험','절정','전야','결전','각성','발동','변신','폭발','충격','맞닥뜨림','발각','침투','잠입','대결','비밀','고백','위협','협박','습격','매복','기습']);
 
 function stripActionWordsFromSlugs(script: string): string {
     let fixed = 0;
