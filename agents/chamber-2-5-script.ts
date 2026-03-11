@@ -650,9 +650,15 @@ async function fixSlugViolations(script: string, model: any, chunkNum: number): 
 1. S# 번호는 절대 변경하지 마세요.
 2. 씬 헤더(S# N. 부분)만 수정. 액션/대사 내용은 절대 변경 금지.
 3. 수정된 헤더는 씬 내용(해당 씬에서 실제 일어나는 일)과 일치해야 합니다.
-   예) 천도당 앞에 서는 장면 → EXT. 천도당 앞 - 밤
-   예) 골목 끝에서 싸우는 장면 → EXT. 서울 골목 끝 - 새벽
-4. 한국어로만 작성. 수정된 대본 전체를 그대로 출력하세요.
+4. 실내(INT.) 동일 장소가 연속될 때는 구역/방위/상태 접미사로 분리하세요.
+   예) 훈련장 → 훈련장 입구 / 훈련장 중앙 / 훈련장 한쪽
+   예) 사무실 → 사무실 창가 / 사무실 복도 / 사무실 안쪽
+   예) 교실 → 교실 앞 / 교실 뒤 / 교실 복도
+5. 실외(EXT.) 동일 장소가 연속될 때는 구체적 위치/상태 접미사로 분리하세요.
+   예) 골목 → 골목 입구 / 골목 안쪽 / 골목 끝
+   예) 건물 앞 → 건물 정문 앞 / 건물 옆길 / 건물 뒤쪽
+6. 수정 후 동일 헤더가 연속 3번 이상 나타나지 않도록 반드시 확인하세요.
+7. 한국어로만 작성. 수정된 대본 전체를 그대로 출력하세요.
 
 대본:
 ${script}`;
@@ -663,7 +669,7 @@ ${script}`;
             generationConfig: { temperature: 0.3, maxOutputTokens: 10000 }
         });
         const fixed = result.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
-        if (fixed && fixed.length > script.length * 0.7) {
+        if (fixed && fixed.length > script.length * 0.9) {
             const remaining = detectConsecutiveSlugs(fixed);
             console.warn(`>>> [V147 Slug Fix] Chunk ${chunkNum}: violations fixed. Remaining: ${remaining}`);
             return fixed;
