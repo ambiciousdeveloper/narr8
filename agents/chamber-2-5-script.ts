@@ -262,8 +262,10 @@ S# 10. INT. 낡은 무도장 - 밤
 경직된 턱 근육이 대변하듯 그는 룬 문자를 뚫어져라 응시한다.
 
 [TARGET VOLUME]
-This section must contain approximately **${targetScenes} scenes** (≈ ${p.targetChars} characters).
-Distribute the story beats evenly across scenes. Do NOT stop early — fill the full target length.
+This section MUST reach **${p.targetChars} characters** total (approximately ${targetScenes} scenes).
+- Each scene MUST have at least 4 action lines + 2 dialogue exchanges. One-liner scenes are INVALID.
+- Do NOT stop early. Keep writing until you have filled the full ${p.targetChars} character target.
+- If you run out of beats, EXPAND each scene with more physical detail, reaction shots, and dialogue.
 
 [MANDATORY RULES]
 1. **SCENE NUMBERING**: You MUST start the content with "S# ${nextNum}.". Use format "S# N. [PLACE] - [TIME]".
