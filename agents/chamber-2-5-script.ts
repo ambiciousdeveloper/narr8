@@ -286,6 +286,14 @@ ${chunk}
                             console.warn(`>>> [V145 Slug Check] Chunk ${i + 1}: ${slugViolations} location(s) used 3+ times consecutively.`);
                             content = await fixSlugViolations(content, model, i + 1);
                         }
+                        // V149: Base location streak check (5+ scenes in same general area)
+                        const baseViolations = detectBaseLocationStreak(content);
+                        if (baseViolations > 0) {
+                            console.warn(`>>> [V149 Base Slug Check] Chunk ${i + 1}: ${baseViolations} base location(s) used 5+ times consecutively. Running fix...`);
+                            content = await fixSlugViolations(content, model, i + 1);
+                        } else {
+                            console.log(`>>> [V149 Base Slug Check] Chunk ${i + 1}: OK.`);
+                        }
                     }
 
                     if (content) {
@@ -336,6 +344,15 @@ ${chunk}
             fullScript = await fixSlugViolations(fullScript, model, 0);
         } else {
             console.log(`>>> [V145 Full-Script Slug Check] OK — no consecutive slug violations.`);
+        }
+
+        // V149 full-script base location streak check
+        const totalBaseViolations = detectBaseLocationStreak(fullScript);
+        if (totalBaseViolations > 0) {
+            console.warn(`>>> [V149 Full-Script Base Slug Check] ${totalBaseViolations} base location(s) appear 5+ times consecutively. Running fix...`);
+            fullScript = await fixSlugViolations(fullScript, model, 0);
+        } else {
+            console.log(`>>> [V149 Full-Script Base Slug Check] OK.`);
         }
 
         return {
@@ -463,7 +480,8 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 김해리
 여기서 뭘 하는 거요?
 10. **INVENT DIALOGUE**: Screenwriters CREATE dialogue. Even when adapting prose with no dialogue, you MUST give characters voices. Invent lines that reveal character, advance plot, or react to the situation.
-11. **NO REPETITION**: Every scene MUST advance the story forward. If a scene does not change the situation, location, or character state compared to the previous scene — DO NOT write it. Merge or skip it. Writing the same hesitation, awakening, or action twice in two consecutive scenes is a CRITICAL ERROR. Sleep/dream/waking scenes are especially prone to repetition — write at most ONE such scene per section.
+11. **NO REPETITION**: Every scene MUST advance the story forward. If a scene does not change the situation, location, or character state compared to the previous scene — DO NOT write it. Merge or skip it. Writing the same hesitation, awakening, or action twice in two consecutive scenes is a CRITICAL ERROR.
+    **SLEEP/DREAM HARD LIMIT**: If the beats include any combination of "falls asleep", "has nightmare", and "wakes up" — write ALL of this as EXACTLY ONE SCENE. Do NOT split the sleep cycle into 2, 3, or 4 separate S# scenes. Merge "잠들다 → 악몽 → 깨어남" into a SINGLE slugline. Maximum 1 sleep-related S# scene per section, regardless of how many beats reference it.
 12. **MULTI-CHARACTER SCENES**: Whenever the story beats involve 2+ characters, scenes MUST feature dialogue exchanges between them — not solo monologue. A character talking only to themselves when other characters are present is an error.
 13. **SOLO SCENE RULE**: When a character is genuinely alone:
     (a) Limit spoken self-talk to MAXIMUM 2 short lines per scene.
@@ -764,6 +782,35 @@ function detectConsecutiveSlugs(script: string): number {
         if (locations[j] === locations[j - 1]) {
             streak++;
             if (streak === 3) violations++;
+        } else {
+            streak = 1;
+        }
+    }
+    return violations;
+}
+
+/**
+ * V149: Extracts the BASE location name, stripping sub-location suffixes added by V147.
+ * Example: "EXT. 낡은 골목길 초입 - 새벽" → "EXT. 낡은 골목길 - 새벽"
+ */
+const BASE_LOC_SUFFIXES = /\s+(입구|중앙|안쪽|한쪽|끝|구석|옆길|뒤쪽|정문\s*앞|창가|복도|계단|세면대\s*앞|문\s*앞|초입|막다른\s*길|부상|연기\s*속|책상\s*앞)(?=\s*-)/u;
+function extractBaseLocation(rawSlug: string): string {
+    return extractSlugKey(rawSlug).replace(BASE_LOC_SUFFIXES, '').trim();
+}
+
+/**
+ * V149: Detects how many distinct BASE locations appear 5+ times consecutively.
+ * Catches battles/chases where V147 sub-location splits fool V145.
+ */
+function detectBaseLocationStreak(script: string): number {
+    const slugLines = script.match(/^S#\s*\d+\.\s*.+/gm) || [];
+    const bases = slugLines.map(extractBaseLocation);
+    let violations = 0;
+    let streak = 1;
+    for (let j = 1; j < bases.length; j++) {
+        if (bases[j] === bases[j - 1]) {
+            streak++;
+            if (streak === 5) violations++;
         } else {
             streak = 1;
         }
