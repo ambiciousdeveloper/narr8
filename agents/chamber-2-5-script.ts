@@ -305,18 +305,27 @@ ${chunk}
                         // Extract only header + stage directions (non-dialogue lines) for detection
                         function isDreamSceneBlock(block: string): boolean {
                             const lines = block.split('\n');
-                            // slug line is always first; then collect non-dialogue direction lines (up to 4 lines total)
+                            // Collect slug + stage-direction lines only (skip character name lines AND their following dialogue lines).
+                            // A character name line: 2-6 Korean chars only, no punctuation, not a slug/place/time keyword.
                             const directionLines: string[] = [];
+                            let skipNext = false; // true = next non-empty line is spoken dialogue, skip it
                             for (const line of lines) {
-                                if (directionLines.length >= 4) break;
+                                if (directionLines.length >= 5) break;
                                 const trimmed = line.trim();
                                 if (!trimmed) continue;
-                                // Skip pure dialogue lines: lines that start with a known character-name pattern
-                                // (Korean name followed by space or nothing, then dialogue content)
-                                // We heuristically detect dialogue as lines NOT starting with S# and not all-caps slug patterns
-                                // that contain Korean dialogue verbs — treat slug line + stage directions only
-                                const isDialogue = /^[가-힣\s]{1,8}\s/.test(trimmed) && !/^(INT|EXT|S#|내레이터)/.test(trimmed);
-                                if (!isDialogue) directionLines.push(trimmed);
+                                if (skipNext) {
+                                    skipNext = false;
+                                    continue; // spoken dialogue line — skip
+                                }
+                                // Detect character name lines: exactly 2-6 Korean chars, no spaces/punctuation
+                                const isCharName = /^[가-힣]{2,6}$/.test(trimmed)
+                                    && !EXCLUDED_WORDS.has(trimmed)
+                                    && !trimmed.includes('.');
+                                if (isCharName) {
+                                    skipNext = true; // next non-empty line is the spoken line
+                                    continue;
+                                }
+                                directionLines.push(trimmed);
                             }
                             const scanText = directionLines.join(' ');
                             return DREAM_DETECT_V153.some(kw => scanText.includes(kw));
@@ -358,6 +367,18 @@ ${content}`;
                             }
                             if (dreamBlocks.length > 1) {
                                 console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: ${dreamBlocks.length} dream scene(s) remain after retries.`);
+                                // V153 Programmatic Fallback: AI consolidation failed — remove extra dream scenes directly.
+                                // Keep the longest block (most dramatically developed), delete the rest.
+                                const allSceneBlocks = content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim());
+                                const sortedDreams = [...dreamBlocks].sort((a, b) => b.length - a.length);
+                                const removeDreamSet = new Set(sortedDreams.slice(1));
+                                const filtered = allSceneBlocks.filter(b => !removeDreamSet.has(b));
+                                const patched = filtered.join('');
+                                if (patched && patched.length > content.length * 0.5) {
+                                    content = renumberScenes(patched);
+                                    const remaining = content.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim() && isDreamSceneBlock(b)).length;
+                                    console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: programmatic fallback applied — ${sortedDreams.length - 1} extra dream scene(s) removed. Remaining: ${remaining}`);
+                                }
                             }
                         } else {
                             console.log(`>>> [V153 Dream Cap] Chunk ${i + 1}: OK (${dreamBlocks.length} dream scene(s)).`);
@@ -404,6 +425,9 @@ ${content}`;
 
         // V146: Renumber scenes sequentially to fix duplicates from Rule 6 splits
         fullScript = renumberScenes(fullScript);
+
+        // V157: Remove duplicate transition lines between consecutive scenes
+        fullScript = removeDuplicateSceneTransitions(fullScript);
 
         // V152: Final internal-state scrub on assembled script
         fullScript = scrubInternalStatements(fullScript);
@@ -687,6 +711,8 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 16. **SCENE COMPLETION**: Every scene you start MUST be fully written before moving to the next. Never end a scene mid-action or mid-dialogue. An incomplete final scene is worse than writing one fewer scene.
 17. **RESOLVED CONFLICT RULE**: Once a conflict is explicitly RESOLVED within the episode (a character overcomes a fear, thanks someone for curing a problem, leaves smiling), do NOT reintroduce the SAME conflict again later in the same episode without a clear narrative justification (e.g., a time-skip, a new cause, or a plot twist that makes sense). Repeating a conflict that was already resolved is a story continuity error. Example: if nightmares are cured in scene 16, scene 17 must NOT show the same character waking from the same nightmares.
 18. **UNIQUE DIALOGUE PER SCENE**: Each character's lines must be DISTINCT across all scenes. Do NOT repeat the same supportive phrases like "넌 할 수 있어", "포기하지 마", "내가 옆에 있잖아" more than ONCE per script. If a supporting character encourages the protagonist multiple times, each scene must use a DIFFERENT approach: challenge them with a question, reference a shared past event, use humor, give concrete advice, or stay silent and act. Copying the same "you can do it" template is a dialogue error.
+19. **CONSISTENT GENDER PRONOUNS**: Check the [CHARACTER DB] for each character's gender. Use 그녀/그녀의/그녀를/그녀에게 for female characters and 그/그의/그를/그에게 for male characters CONSISTENTLY across EVERY scene you write. Never switch pronouns for the same character between scenes. If the source prose uses incorrect pronouns for a character, use the [CHARACTER DB] gender as the authoritative source and correct them. Mixing 그 and 그녀 for the same character within a single script section is a CRITICAL ERROR.
+20. **NO DUPLICATE TRANSITION LINES**: When writing consecutive scenes in the same location or continuing an action from the previous scene, do NOT repeat the same action line as both the closing line of one scene and the opening line of the next. Each scene must open with NEW content. Example of FORBIDDEN pattern — S# 4 ends with "강유나, 뒤따라 들어간다." and S# 5 opens with the same "강유나, 뒤따라 들어간다." → delete the duplicate opening line from S# 5 and start S# 5 with the NEXT action.
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
@@ -1028,6 +1054,69 @@ function renumberScenes(script: string): string {
         counter++;
         return `${prefix}${counter}${suffix}`;
     });
+}
+
+/**
+ * V157: Removes duplicate action lines that appear at the end of one scene and
+ * the beginning of the next. Prevents verbatim repetition when the AI echoes a
+ * transition beat as both a closing action and an opening action.
+ */
+function removeDuplicateSceneTransitions(script: string): string {
+    const blocks = script.split(/(?=^S#\s*\d+[A-Za-z]?\.)/m).filter(b => b.trim());
+    if (blocks.length < 2) return script;
+
+    let removedTotal = 0;
+    const result: string[] = [blocks[0]];
+
+    for (let i = 1; i < blocks.length; i++) {
+        const prevBlock = result[result.length - 1];
+        const currBlock = blocks[i];
+
+        // Collect last meaningful action lines of previous block (non-slug, non-empty, substantial)
+        const prevLines = prevBlock.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('S#'));
+        const prevTail = new Set(prevLines.slice(-5).filter(l => l.length > 10));
+
+        // Find slug line index in current block
+        const currBlockLines = currBlock.split('\n');
+        const slugIdx = currBlockLines.findIndex(l => /^S#\s*\d+/.test(l.trim()));
+        const afterSlug = currBlockLines.slice(slugIdx + 1);
+
+        // Detect duplicate lines at start of current block's content
+        let dupCount = 0;
+        for (const line of afterSlug.slice(0, 5)) {
+            const trimmed = line.trim();
+            if (trimmed.length > 10 && prevTail.has(trimmed)) {
+                dupCount++;
+            } else if (trimmed) {
+                break; // stop at first non-duplicate non-empty line
+            }
+        }
+
+        if (dupCount > 0) {
+            // Remove duplicate opening lines from current block
+            let removed = 0;
+            const cleanedAfterSlug = afterSlug.filter(line => {
+                if (removed >= dupCount) return true;
+                if (!line.trim()) return true; // keep blank lines
+                if (line.trim().length > 10 && prevTail.has(line.trim())) {
+                    removed++;
+                    return false;
+                }
+                return true;
+            });
+            const slugLine = slugIdx >= 0 ? currBlockLines[slugIdx] : currBlockLines[0];
+            result.push([slugLine, ...cleanedAfterSlug].join('\n'));
+            removedTotal += removed;
+            console.warn(`>>> [V157 Dup Remove] Scene ${i + 1}: removed ${removed} duplicate opening line(s).`);
+        } else {
+            result.push(currBlock);
+        }
+    }
+
+    if (removedTotal > 0) {
+        console.log(`>>> [V157 Dup Remove] Total ${removedTotal} duplicate transition line(s) removed across script.`);
+    }
+    return result.join('');
 }
 
 // safeParseJSON is imported from lib/json-repair.ts
