@@ -214,10 +214,15 @@ export class ScriptScribe {
 RULES:
 1. Add dialogue after every 2-3 action lines: character name alone on one line, spoken text on the next.
 2. Characters must speak — to each other, to themselves, or to the situation aloud.
-3. Action lines describe ONLY what the camera physically records. No internal state or emotional narration.
+3. ZERO PROSE LEAK: Action lines describe ONLY what a camera physically records. No internal state or emotional narration.
+   FORBIDDEN (cannot be filmed — delete or replace with action/dialogue):
+   × "마음속에", "내면", "~을 느낀다", "생각에 잠겼다", "불안감을 느끼", "혼란스러움", "깨달았다"
+   × "복잡한 감정", "마치 ~같았다", any sentence about thoughts/emotions without a physical act
+   If you encounter these in the existing text, REPLACE them with a physical action or dialogue line.
 4. Keep all existing scene sluglines (S# N. ...) intact. Write in Korean only.
 5. Add approximately ${shortage} more characters through dialogue.
 6. LOCATION VARIETY CHECK: If 3 or more consecutive scenes share the exact same slugline, you MUST change at least one of them to a neighboring sub-location (append "계단", "안쪽", "입구", etc. to the place name) or shift the time label (새벽 → 이른 아침). Identical sluglines repeated 3+ times in a row is a formatting error.
+7. SOLO SCENE CHECK: If a character is alone for 3 or more consecutive scenes, add another character appearing briefly (knock on door, phone call, passer-by) to break the solo streak.
 
 Current screenplay:
 ${content}
@@ -396,14 +401,16 @@ DO NOT submit another response without spoken dialogue.
 
     // V148: Dream/sleep ban — if previous chunks already used a sleep/nightmare scene, forbid it here
     const dreamBan = p.dreamSceneUsed ? `
-⛔ [DREAM/SLEEP BAN — ACTIVE]
-This script already contains a sleep, nightmare, or awakening scene in a previous section.
-YOU ARE ABSOLUTELY FORBIDDEN from writing ANY of the following in this section:
-- A character falling asleep or lying in bed
-- A nightmare or dream sequence
-- A character waking up from a bad dream (sweating, gasping, etc.)
-- Any "꿈", "악몽", "잠들", "수면", "잠에서 깨", "또 그 꿈" scene
-If the story beats seem to call for such a scene, SKIP IT and jump to the next story event.
+⛔ [DREAM/SLEEP BAN — ACTIVE — THIS OVERRIDES ALL STORY BEATS]
+This script already contains a sleep/nightmare/awakening scene. ONE is the HARD LIMIT for the entire script.
+MANDATORY: Even if the [STORY BEATS] section below explicitly mentions sleeping, dreaming, or waking from a nightmare — you MUST IGNORE THAT BEAT and write the NEXT non-sleep beat instead.
+This ban takes ABSOLUTE PRIORITY over every story beat instruction below.
+FORBIDDEN in this section (zero exceptions):
+  × Falling asleep / lying in bed / 잠들다
+  × Nightmare or dream sequence / 악몽 / 꿈을 꾸다
+  × Waking up drenched in sweat / 악몽에서 깨다 / 또 악몽
+  × Any "또 그 꿈" or flashback-dream hybrid
+If a beat is about sleeping or nightmares → SKIP IT ENTIRELY, move to the next action beat.
 ⛔ [END DREAM BAN]
 ` : '';
 
@@ -442,7 +449,11 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 [MANDATORY RULES]
 1. **SCENE NUMBERING**: You MUST start the content with "S# ${nextNum}.". Use format "S# N. [PLACE] - [TIME]".
 2. **HIGH DENSITY**: Merge multiple paragraphs into one dense S# sequence. NO "S1", "S2" shortcuts.
-3. **ZERO PROSE LEAK**: Action lines describe ONLY what a camera physically records — movement, sound, touch, visible expression. If a line cannot be filmed (emotion, thought, intention, attitude), DELETE it and replace it with spoken dialogue or a physical action.
+3. **ZERO PROSE LEAK**: Action lines describe ONLY what a camera physically records — movement, sound, touch, visible expression. If a line CANNOT be filmed, DELETE it and replace it with spoken dialogue or a physical action.
+   FORBIDDEN phrases (these cannot be filmed — replace with action or dialogue):
+   × "마음속에", "내면", "~을 느낀다", "생각에 잠겼다", "불안감을 느끼", "혼란스러움", "깨달았다", "복잡한 감정"
+   × "~인 듯", "마치 ~같았다", "~한 표정" (unless followed by a specific physical detail)
+   × Any sentence describing internal emotion, intention, or attitude that has no physical manifestation
 4. **DIALOGUE PURITY**: No "(혼잣말)", "(침묵)". Action lines for silence.
 5. **DIALOGUE MANDATORY**: Every scene MUST contain at least ONE spoken dialogue line. Characters MUST speak. A scene with ZERO dialogue lines is INVALID and will be rejected. OUTPUT WITH NO DIALOGUE WILL BE DISCARDED. IF THE SOURCE HAS NO DIALOGUE, YOU MUST INVENT APPROPRIATE DIALOGUE — DO NOT use the absence of dialogue in the source as an excuse to omit it.
 6. **NO CONSECUTIVE SILENT SCENES**: You MUST NOT write 3 or more consecutive scenes without dialogue. Insert spoken lines to break any silent streak.
@@ -453,15 +464,18 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 여기서 뭘 하는 거요?
 10. **INVENT DIALOGUE**: Screenwriters CREATE dialogue. Even when adapting prose with no dialogue, you MUST give characters voices. Invent lines that reveal character, advance plot, or react to the situation.
 11. **NO REPETITION**: Every scene MUST advance the story forward. If a scene does not change the situation, location, or character state compared to the previous scene — DO NOT write it. Merge or skip it. Writing the same hesitation, awakening, or action twice in two consecutive scenes is a CRITICAL ERROR. Sleep/dream/waking scenes are especially prone to repetition — write at most ONE such scene per section.
-14. **LOCATION VARIETY**: Do NOT write more than 2 consecutive scenes at the exact same slugline (same place AND same time of day). If action continues, use CUT TO, move to a different sub-location, or shift the time indicator (e.g., 밤 → 새벽). Three or more scenes with the identical slugline in a row is a formatting error.
 12. **MULTI-CHARACTER SCENES**: Whenever the story beats involve 2+ characters, scenes MUST feature dialogue exchanges between them — not solo monologue. A character talking only to themselves when other characters are present is an error.
 13. **SOLO SCENE RULE**: When a character is genuinely alone:
     (a) Limit spoken self-talk to MAXIMUM 2 short lines per scene.
     (b) Fill the scene with: physical actions (문을 박찬다, 주먹을 쥔다, 사진을 뒤집는다), ambient sounds (발소리, 빗소리, 전화벨), environmental changes (바람이 창문을 흔든다, 가로등이 깜박인다).
-    (c) Inner reflection must be expressed through a PHYSICAL OBJECT or ACTION — never as a spoken thought. Example: instead of "내가 왜 이렇게 됐지?" → character picks up a photo, stares at it, then puts it face-down.
+    (c) Inner reflection MUST be expressed through a PHYSICAL OBJECT or ACTION — never as a spoken thought. BAD: "내가 왜 이렇게 됐지?" → GOOD: character picks up a photo, stares at it, then puts it face-down.
     (d) After MAXIMUM 3 consecutive scenes with the same character alone, you MUST introduce another character (even briefly — a knock, a call, a passer-by).
-15. **SCENE COMPLETION**: Every scene you start MUST be fully written before moving to the next. Never end a scene mid-action or mid-dialogue. Complete the current scene's action-dialogue arc even if you are near the target character count. An incomplete final scene is worse than writing one fewer scene.
-16. **LOCATION TRANSITION**: Whenever the story moves from one distinct location to another (e.g., alley → school, apartment → street), you MUST write a brief transition scene (1-3 lines + 1 dialogue) showing the character LEAVING the old location or ARRIVING at the new one. Never cut directly between two very different locations without a bridging action or dialogue line.
+14. **LOCATION VARIETY**:
+    (a) EXACT SLUGLINE: Do NOT write more than 2 consecutive scenes with the EXACT same slugline (same place AND same time of day).
+    (b) GENERAL AREA: Do NOT write more than 4 consecutive scenes in the same GENERAL AREA (same building, same street, same zone), even with different sub-location suffixes (입구/중앙/안쪽 etc.).
+    (c) BATTLE/ACTION: Fight sequences are especially prone to location clumping. After 3 combat scenes in the same area, MOVE to a completely different location — rooftop, building interior, nearby plaza, etc.
+15. **LOCATION TRANSITION**: Whenever the story moves from one distinct location to another (e.g., alley → school, point-A → point-B), you MUST include a brief transition beat showing the character LEAVING or ARRIVING. Never cut directly between two very different locations without a bridging line. Example: one action line + one dialogue is sufficient.
+16. **SCENE COMPLETION**: Every scene you start MUST be fully written before moving to the next. Never end a scene mid-action or mid-dialogue. An incomplete final scene is worse than writing one fewer scene.
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
