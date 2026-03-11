@@ -78,7 +78,8 @@ export class ScriptScribe {
             lastAction: "",
             lastThreeLines: "",
             forbiddenBeats: [] as string[],
-            lastSceneNumber: 0
+            lastSceneNumber: 0,
+            recentSlugs: [] as string[]
         };
 
         const beatChunk = Math.ceil(beats.length / actualSections);
@@ -416,7 +417,11 @@ ${p.sourceProse}
 
 [VISUAL BRIDGE]
 ${p.chronicle}
-
+${p.recentSlugs?.length > 0 ? `
+[RECENTLY USED SLUGLINES — DO NOT OVERUSE]
+The following scene locations were already used in previous sections. You MUST introduce at least 2 NEW locations this section. Do NOT write 3 or more consecutive scenes that share the same location+time from this list:
+${([...new Set(p.recentSlugs)] as string[]).map(s => `- ${s}`).join('\n')}
+` : ''}
 [JSON OUTPUT]
 {
   "title": "Sequence",
@@ -447,11 +452,17 @@ function updateContextState(content: string, state: any) {
     );
     const lastAction = actionLines[actionLines.length - 1] || state.lastAction;
 
+    // Track recently used sluglines to inject into the next chunk prompt
+    const sluglineMatches = content.match(/^S#\s*\d+\.\s*[^\n]+/gm) || [];
+    const extractedSlugs = sluglineMatches.map(s => s.replace(/^S#\s*\d+\.\s*/, '').trim()).filter(Boolean);
+    const updatedSlugs = [...(state.recentSlugs || []), ...extractedSlugs].slice(-8);
+
     return {
         ...state,
         lastAction: scrubMeta(lastAction).substring(0, 300),
         lastSceneNumber: lastScene,
-        lastThreeLines: lines.slice(-3).join('\n')
+        lastThreeLines: lines.slice(-3).join('\n'),
+        recentSlugs: updatedSlugs
     };
 }
 
