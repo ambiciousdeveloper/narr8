@@ -80,7 +80,8 @@ export class ScriptScribe {
             forbiddenBeats: [] as string[],
             lastSceneNumber: 0,
             recentSlugs: [] as string[],
-            dreamSceneCount: 0  // V148: 전체 대본에서 악몽/수면 씬 누적 카운트 (최대 2회 허용)
+            dreamSceneCount: 0,  // V148: 전체 대본에서 악몽/수면 씬 누적 카운트 (최대 2회 허용)
+            protagonistPronouns: '' as string  // V158: 첫 청크 생성 후 감지된 주인공 대명사 (그/그녀), 이후 청크에 명시 주입
         };
 
         const beatChunk = Math.ceil(beats.length / actualSections);
@@ -236,6 +237,44 @@ Output the full expanded screenplay in Korean S# format.`;
                         if (expandedText && expandedText.length > content.length) {
                             content = scrubMeta(expandedText);
                             content = scrubInternalStatements(content); // V152
+                        }
+                        // V143B: Second expansion pass — if first expansion still left content under 70% of target
+                        if (content && content.length < sectionLengthTarget * 0.70) {
+                            const shortage2 = sectionLengthTarget - content.length;
+                            console.warn(`>>> [V143B 2nd Expansion] Chunk ${i + 1}: ${content.length}/${sectionLengthTarget} chars after 1st expansion. Running 2nd pass...`);
+                            const expandPrompt2 = `You are a professional Korean screenplay writer. The following screenplay needs MORE content to reach the target length of ${sectionLengthTarget} characters. It is currently only ${content.length} characters.
+
+TASK: Add ${shortage2} more characters by expanding EXISTING scenes — NOT adding new plot events.
+- Extend dialogue exchanges: add 2-3 more turns per existing conversation
+- Add reaction shots and physical detail to action lines
+- Deepen character interactions with follow-up dialogue
+- Add environmental/sensory detail (sounds, textures, lighting) to scene descriptions
+- Keep all existing S# sluglines and scene structure intact
+
+RULES:
+1. Do NOT add new scenes or new characters
+2. Do NOT add internal-state descriptions (마음속에, 생각에 잠겼다, etc.)
+3. Each expansion must be filmable — physical action or spoken dialogue only
+4. Write in Korean only
+
+Current screenplay:
+${content}
+
+Output the full expanded screenplay.`;
+                            try {
+                                const expandResult2 = await model.generateContent({
+                                    contents: [{ role: 'user', parts: [{ text: expandPrompt2 }] }],
+                                    generationConfig: { temperature: 0.65, maxOutputTokens: 16000 }
+                                });
+                                const expandedText2 = expandResult2.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+                                if (expandedText2 && expandedText2.length > content.length) {
+                                    content = scrubMeta(expandedText2);
+                                    content = scrubInternalStatements(content);
+                                    console.warn(`>>> [V143B 2nd Expansion] Chunk ${i + 1}: expanded to ${content.length} chars.`);
+                                }
+                            } catch (e) {
+                                console.warn(`>>> [V143B 2nd Expansion] Chunk ${i + 1}: error — ${e}.`);
+                            }
                         }
                     } else if (!content) {
                         console.warn(`>>> [V143 Skip] Chunk ${i + 1}: no content after retries. Running V144 mini-generation...`);
@@ -476,7 +515,8 @@ function scrubMeta(text: string): string {
         .replace(/Professional.*Screenplay.*/gi, "")
         .replace(/High-density.*no.*\(혼잣말\).*/gi, "")
         // Remove all parenthetical stage directions from dialogue lines (e.g. (혼잣말), (잠꼬대), (펜을 멈추고))
-        .replace(/\([^)]{1,20}\)\s*/g, "")
+        // Extended to 80 chars to catch longer action-in-parenthesis patterns like "(잠시 멈춰 서서 하늘을 바라본다. 눈빛이 어둡다.)"
+        .replace(/\([^)]{1,80}\)\s*/g, "")
         .replace(/^.*대본.*:.*$/gm, "")
         .replace(/```json/gi, "")
         .replace(/```/g, "")
@@ -544,6 +584,17 @@ const INTERNAL_STATE_PATTERNS: RegExp[] = [
     /[^。\n]*느껴진다[^。\n]*/g,
     /[^。\n]*짓누른다[^。\n]*/g,
     /[^。\n]*감지한\s*듯[^。\n]*/g,
+    // ~한 듯 / ~인 듯 형태의 추측/내면 묘사 패턴
+    /[^。\n]*결심한\s*듯[^。\n]*/g,
+    /[^。\n]*생각하는\s*듯[^。\n]*/g,
+    /[^。\n]*알고\s*있는\s*듯[^。\n]*/g,
+    /[^。\n]*짐작하[고는]?\s*있는\s*듯[^。\n]*/g,
+    /[^。\n]*골똘히\s*생각[^。\n]*/g,
+    /[^。\n]*무언가를\s*생각[^。\n]*/g,
+    /[^。\n]*깊은\s*고민[^。\n]*/g,
+    /[^。\n]*고민의\s*흔적[^。\n]*/g,
+    /[^。\n]*마음을\s*더욱\s*무겁[^。\n]*/g,
+    /[^。\n]*무거운\s*마음[^。\n]*/g,
 ];
 function scrubInternalStatements(text: string): string {
     const lines = text.split('\n');
@@ -649,12 +700,22 @@ Do NOT write another full nightmare cycle (잠들다 → 악몽 → 깨어남) i
     const bpGlossary = bp.glossary ? JSON.stringify(bp.glossary).substring(0, 1000) : "";
     const bpChars = bp.character_arcs ? JSON.stringify(bp.character_arcs).substring(0, 1500) : "";
 
+    // V158: Protagonist pronoun lock — inject explicit pronoun instruction if detected from prior chunks
+    const pronounLock = p.protagonistPronouns ? `
+🔒 [PROTAGONIST PRONOUN LOCK — MANDATORY — CANNOT BE OVERRIDDEN]
+The protagonist of this script uses **${p.protagonistPronouns === '그녀' ? '그녀/그녀의/그녀를/그녀에게 (female)' : '그/그의/그를/그에게 (male)'}** pronouns.
+This was determined from previously generated scenes and is LOCKED for the rest of the script.
+EVERY action line referring to the protagonist MUST use ${p.protagonistPronouns === '그녀' ? '"그녀"' : '"그"'} — no exceptions.
+Using ${p.protagonistPronouns === '그녀' ? '"그는", "그의", "그를"' : '"그녀는", "그녀의", "그녀를"'} for the protagonist is a CRITICAL ERROR that will be rejected.
+🔒 [END PRONOUN LOCK]
+` : '';
+
     return `
 [[SYSTEM_PROTOCOL]]
 [ROLE]
 Professional Script Adaptor.
 Convert PROSE into a high-density, visual SCREENPLAY in **${langLabel}** ONLY.
-${dreamBan}${dialogueAlert}${personaBlock}
+${pronounLock}${dreamBan}${dialogueAlert}${personaBlock}
 [GOLDEN FORMAT SAMPLE — 2-character exchange (this is the standard)]
 S# 10. INT. 낡은 무도장 - 밤
 먼지 쌓인 매트리스 위로 달빛이 스며든다.
@@ -787,13 +848,41 @@ function updateContextState(content: string, state: any) {
         DREAM_DETECT.some(kw => b.includes(kw))
     ).length;
 
+    // V158: Protagonist pronoun detection — scan action lines (non-dialogue) for 그녀 vs 그 usage.
+    // Only update if not yet determined. This locks in the pronoun after the first chunk generates content.
+    let detectedPronoun = state.protagonistPronouns || '';
+    if (!detectedPronoun) {
+        // Count pronoun usage in action lines only (skip dialogue lines)
+        const actionOnlyText = (() => {
+            const scriptLines = content.split('\n');
+            const result: string[] = [];
+            let skipNext = false;
+            for (const ln of scriptLines) {
+                const t = ln.trim();
+                if (!t || t.startsWith('S#')) { skipNext = false; continue; }
+                const isName = /^[가-힣]{2,6}$/.test(t) && !EXCLUDED_WORDS.has(t);
+                if (isName) { skipNext = true; continue; }
+                if (skipNext) { skipNext = false; continue; }
+                result.push(t);
+            }
+            return result.join(' ');
+        })();
+        const herCount = (actionOnlyText.match(/그녀/g) || []).length;
+        // Match 그/그의/그는/그를/그에게 but NOT 그녀 (negative lookbehind on 녀)
+        const himCount = (actionOnlyText.match(/(?<![가-힣])그(?:의|는|를|가|에게|와|도|만|조차|마저)(?!녀)/g) || []).length;
+        if (herCount + himCount >= 3) {
+            detectedPronoun = herCount >= himCount ? '그녀' : '그';
+        }
+    }
+
     return {
         ...state,
         lastAction: scrubMeta(lastAction).substring(0, 300),
         lastSceneNumber: lastScene,
         lastThreeLines: lines.slice(-3).join('\n'),
         recentSlugs: updatedSlugs,
-        dreamSceneCount: (state.dreamSceneCount ?? 0) + dreamBlocksInChunk
+        dreamSceneCount: (state.dreamSceneCount ?? 0) + dreamBlocksInChunk,
+        protagonistPronouns: detectedPronoun
     };
 }
 
@@ -969,6 +1058,7 @@ async function fixSlugViolations(script: string, model: any, chunkNum: number): 
    예) 건물 앞 → 건물 정문 앞 / 건물 옆길 / 건물 뒤쪽
 6. 수정 후 동일 헤더가 연속 3번 이상 나타나지 않도록 반드시 확인하세요.
 7. 한국어로만 작성. 수정된 대본 전체를 그대로 출력하세요.
+8. ⚠️ 씬 헤더에 행동 묘사 단어를 절대 포함하지 마세요. "뒤돌아보는", "묻는", "싸우는", "대화하는", "달리는" 같은 동사형 표현은 FORBIDDEN입니다. 헤더는 오직 장소명 + 시간대만 포함해야 합니다. 나쁜 예) "EXT. 골목길 뒤돌아보는 강준혁 - 새벽" → 좋은 예) "EXT. 골목길 안쪽 - 새벽"
 
 대본:
 ${script}`;
