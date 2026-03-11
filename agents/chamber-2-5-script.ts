@@ -131,12 +131,30 @@ export class ScriptScribe {
                 if (response.success) {
                     let content = scrubMeta(response.data.content || "");
 
+                    // V140.6: JSON parsed but no `content` field — check for `scenes` array format
+                    if (!content && Array.isArray(response.data?.scenes) && response.data.scenes.length > 0) {
+                        const converted = convertScenesJsonToScreenplay(response.data.scenes);
+                        if (converted.length > 100) {
+                            content = scrubMeta(converted);
+                            console.warn(`>>> [V140.6 Scenes Fallback] Chunk ${i + 1}: Converted ${response.data.scenes.length} scenes from JSON array (${content.length} chars).`);
+                        }
+                    }
+
                     // V140.5: JSON parsed but content field is empty — salvage screenplay from rawText
                     if (!content && lastRawResponse.includes('S#')) {
                         const sceneMatch = lastRawResponse.match(/S#\s*\d+[\s\S]*/);
                         if (sceneMatch) {
-                            content = scrubMeta(sceneMatch[0]);
-                            console.warn(`>>> [V140.5 Raw Fallback] Chunk ${i + 1}: JSON content empty, recovered ${content.length} chars from raw text.`);
+                            let recovered = sceneMatch[0];
+                            // Strip trailing JSON blob that may follow inline screenplay text
+                            const jsonBlobIdx = recovered.search(/\n\s*\{[\s\S]*"(?:title|scenes|scene_number)"/);
+                            if (jsonBlobIdx > 50) {
+                                recovered = recovered.substring(0, jsonBlobIdx).trim();
+                                console.warn(`>>> [V140.5] Stripped trailing JSON blob from raw recovery.`);
+                            }
+                            if (recovered.length > 50) {
+                                content = scrubMeta(recovered);
+                                console.warn(`>>> [V140.5 Raw Fallback] Chunk ${i + 1}: JSON content empty, recovered ${content.length} chars from raw text.`);
+                            }
                         }
                     }
 
@@ -562,6 +580,18 @@ ${scenesWithChars.map((s, i) => `Scene ${i + 1} — ${s.charName} speaks:\n${s.b
         console.error(`>>> [V142] Injection pass failed:`, err);
         return script;
     }
+}
+
+/**
+ * V140.6: Converts a `scenes` JSON array (model alternate output format) to S# screenplay text.
+ * Called when safeParseJSON succeeds but response.data has no `content` field, only `scenes`.
+ */
+function convertScenesJsonToScreenplay(scenes: any[]): string {
+    return scenes.map((scene: any) => {
+        const slug = `S# ${scene.scene_number}. ${scene.location}`;
+        const body = Array.isArray(scene.actions) ? scene.actions.join('\n') : '';
+        return `${slug}\n${body}`;
+    }).filter(s => s.trim()).join('\n\n');
 }
 
 // safeParseJSON is imported from lib/json-repair.ts
