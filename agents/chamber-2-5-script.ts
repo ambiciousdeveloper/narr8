@@ -92,7 +92,8 @@ export class ScriptScribe {
             if (!chunk && i > 0) break;
 
             let retryCount = 0;
-            let currentTemp = 0.6;
+            // 후반 청크(3번째 이후)는 JSON 파싱 실패율이 높으므로 temperature를 낮춰 준수율 향상
+            let currentTemp = i >= 2 ? 0.5 : 0.6;
             let dialogueRetry = false;
 
             while (retryCount < 3) {
@@ -436,10 +437,11 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 김해리
 여기서 뭘 하는 거요?
 10. **INVENT DIALOGUE**: Screenwriters CREATE dialogue. Even when adapting prose with no dialogue, you MUST give characters voices. Invent lines that reveal character, advance plot, or react to the situation.
-11. **NO REPETITION**: Every scene MUST advance the story forward. If a scene does not change the situation, location, or character state compared to the previous scene — DO NOT write it. Merge or skip it. Writing the same hesitation or action twice in two consecutive scenes is a CRITICAL ERROR.
+11. **NO REPETITION**: Every scene MUST advance the story forward. If a scene does not change the situation, location, or character state compared to the previous scene — DO NOT write it. Merge or skip it. Writing the same hesitation, awakening, or action twice in two consecutive scenes is a CRITICAL ERROR. Sleep/dream/waking scenes are especially prone to repetition — write at most ONE such scene per section.
 14. **LOCATION VARIETY**: Do NOT write more than 2 consecutive scenes at the exact same slugline (same place AND same time of day). If action continues, use CUT TO, move to a different sub-location, or shift the time indicator (e.g., 밤 → 새벽). Three or more scenes with the identical slugline in a row is a formatting error.
 12. **MULTI-CHARACTER SCENES**: Whenever the story beats involve 2+ characters, scenes MUST feature dialogue exchanges between them — not solo monologue. A character talking only to themselves when other characters are present is an error.
 13. **SOLO MONOLOGUE LIMIT**: If a character is genuinely alone, limit self-talk to 2 lines per scene. Fill remaining dialogue requirement with physical actions, ambient sounds, or reactive behaviour.
+15. **SCENE COMPLETION**: Every scene you start MUST be fully written before moving to the next. Never end a scene mid-action or mid-dialogue. Complete the current scene's action-dialogue arc even if you are near the target character count. An incomplete final scene is worse than writing one fewer scene.
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
@@ -467,10 +469,14 @@ ${p.recentSlugs?.length > 0 ? `
 The following scene locations were already used in previous sections. You MUST introduce at least 2 NEW locations this section. Do NOT write 3 or more consecutive scenes that share the same location+time from this list:
 ${([...new Set(p.recentSlugs)] as string[]).map(s => `- ${s}`).join('\n')}
 ` : ''}
-[JSON OUTPUT]
+[JSON OUTPUT — MANDATORY]
+⚠️ YOU MUST RETURN ONLY VALID JSON. Do NOT output raw screenplay text outside of a JSON object.
+⚠️ The "content" field MUST contain ALL screenplay text as a single JSON string value (use \\n for line breaks inside the string).
+⚠️ If your response is not parseable JSON, the entire chunk will be DISCARDED and the script will be broken.
+⚠️ Do NOT wrap the JSON in markdown code blocks (no \`\`\`json). Output raw JSON only.
 {
-  "title": "Sequence",
-  "content": "Professional ${langLabel} screenplay starting with S# ${nextNum}...",
+  "title": "Sequence ${p.idx}/${p.total}",
+  "content": "S# ${nextNum}. [PLACE] - [TIME]\\n[action]\\n[CHARACTER NAME]\\n[spoken dialogue]\\n...",
   "characters": []
 }
 `;

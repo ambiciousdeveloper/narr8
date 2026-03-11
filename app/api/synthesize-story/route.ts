@@ -41,8 +41,49 @@ function isValidCharacter(char: Record<string, unknown>): boolean {
 }
 
 /**
+ * [BEAT DEDUPLICATOR] 유사/반복 beat 제거
+ * - 잠/꿈/각성 관련 beat는 최대 1개로 제한
+ * - 동일 장소·동일 감정의 연속 beat 병합
+ */
+function deduplicateBeats(beats: string[]): string[] {
+    const SLEEP_DREAM_KEYWORDS = ['악몽', '꿈', '잠', '깨어', '각성', '수면', '잠들', '잠에서', '깨달'];
+    let sleepBeatCount = 0;
+    const result: string[] = [];
+
+    for (const beat of beats) {
+        const hasSleepKeyword = SLEEP_DREAM_KEYWORDS.some(kw => beat.includes(kw));
+        if (hasSleepKeyword) {
+            sleepBeatCount++;
+            if (sleepBeatCount > 1) {
+                console.warn(`>>> [Beat Dedup] Dropping extra sleep/dream beat (${sleepBeatCount}): "${beat.substring(0, 60)}..."`);
+                continue;
+            }
+        }
+
+        // 직전 beat와 한국어 키워드 50% 이상 겹치면 중복으로 간주
+        if (result.length > 0) {
+            const prevKeywords = new Set(result[result.length - 1].match(/[가-힣]{2,}/g) || []);
+            const curKeywords = (beat.match(/[가-힣]{2,}/g) || []);
+            const overlap = curKeywords.filter(kw => prevKeywords.has(kw)).length;
+            const similarity = overlap / Math.max(curKeywords.length, 1);
+            if (similarity >= 0.55 && curKeywords.length >= 4) {
+                console.warn(`>>> [Beat Dedup] Dropping similar beat (sim=${(similarity * 100).toFixed(0)}%): "${beat.substring(0, 60)}..."`);
+                continue;
+            }
+        }
+
+        result.push(beat);
+    }
+
+    if (result.length < beats.length) {
+        console.log(`>>> [Beat Dedup] ${beats.length} → ${result.length} beats after dedup`);
+    }
+    return result;
+}
+
+/**
  * [NAME SWAP MAP] 원작 이름 → 각색 이름 치환 맵 + 금지어 목록 생성
- * 1순위: 블루프린트 character_arcs에서 추출
+ * 1순위: 블루프린트 character_arcs에서 추출 (originalBp + adaptedBp 모두 검색)
  * 2순위: glossary에서 추출
  * 3순위: DB characters 테이블 직접 조회 (fallback)
  */
@@ -54,15 +95,17 @@ async function buildNameSwapMap(
     const nameMap: Record<string, string> = {};
     const forbiddenNames: string[] = [];
 
-    if (originalBp?.character_arcs) {
+    // 1순위: originalBp AND adaptedBp 모두에서 character_arcs 추출
+    for (const bp of [originalBp, adaptedBp]) {
+        if (!bp?.character_arcs) continue;
         try {
-            const arcs = typeof originalBp.character_arcs === 'string'
-                ? JSON.parse(originalBp.character_arcs)
-                : originalBp.character_arcs as Record<string, string>[];
+            const arcs = typeof bp.character_arcs === 'string'
+                ? JSON.parse(bp.character_arcs)
+                : bp.character_arcs as Record<string, string>[];
             arcs.forEach((char: Record<string, string>) => {
                 const original = char.original_name_kr || char.name_kr;
                 const reinterpreted = char.reinterpreted_name_kr;
-                if (original && reinterpreted) {
+                if (original && reinterpreted && original !== reinterpreted) {
                     nameMap[original] = reinterpreted;
                     forbiddenNames.push(original);
                 }
@@ -73,7 +116,7 @@ async function buildNameSwapMap(
         }
     }
 
-    // Fallback: DB에서 직접 조회
+    // Fallback: DB에서 직접 조회 (character_arcs에서 매핑을 못 찾은 경우)
     if (Object.keys(nameMap).length === 0) {
         try {
             const { data: dbCharacters } = await supabase
@@ -102,8 +145,6 @@ async function buildNameSwapMap(
                         });
                     }
                 });
-            } else {
-                console.warn(">>> WARNING: No characters found in DB. nameMap is empty. IP protection may fail!");
             }
         } catch (e) {
             console.error(">>> Error querying characters table:", e);
@@ -137,6 +178,13 @@ async function buildNameSwapMap(
         } catch (e) {
             console.warn(">>> Error parsing glossary for swap map:", e);
         }
+    }
+
+    // 최종 상태 경고 (모든 소스 처리 후)
+    if (Object.keys(nameMap).length === 0) {
+        console.warn(">>> WARNING: nameMap is empty after all sources (blueprint, DB, glossary). IP protection may fail!");
+    } else {
+        console.log(`>>> nameMap populated: ${Object.keys(nameMap).length} entries from blueprint/DB/glossary.`);
     }
 
     return { nameMap, forbiddenNames };
@@ -463,8 +511,9 @@ export async function POST(req: NextRequest) {
 
             if (novelSourceText) {
                 console.log(`>>> [NOVEL-FIRST] Novel found (${novelSourceText.length} chars). Extracting beats from novel prose to ensure sync.`);
-                finalBeats = await GrandDirector.extractBeatsFromProse(novelSourceText, cleanedCharContext);
-                console.log(`>>> [NOVEL-FIRST] Successfully extracted ${finalBeats.length} beats from novel prose.`);
+                const rawBeats = await GrandDirector.extractBeatsFromProse(novelSourceText, cleanedCharContext);
+                finalBeats = deduplicateBeats(rawBeats);
+                console.log(`>>> [NOVEL-FIRST] Successfully extracted ${finalBeats.length} beats from novel prose (raw: ${rawBeats.length}).`);
             } else {
                 console.log(`>>> [NOVEL-FIRST] No novel found. Falling back to synopsis expansion.`);
                 finalBeats = await GrandDirector.expandBeats(

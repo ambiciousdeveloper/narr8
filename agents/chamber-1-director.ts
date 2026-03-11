@@ -289,16 +289,23 @@ export class GrandDirector {
 
     const prompt = `
         Role: Narrative Analyst for Screenplay Adaptation
-        Objective: Deconstruct the provided NOVEL PROSE into a sequence of 8-15 screenplay-ready narrative beats.
+        Objective: Deconstruct the provided NOVEL PROSE into a sequence of 8-12 screenplay-ready narrative beats.
 
         [INSTRUCTION]
         - Analyze the pacing, events, and dialogue in the prose.
         - The resulting beats must represent exactly what happens in this specific prose, no more, no less.
-        - Each beat should describe a distinct scene or movement suitable for screenplay conversion.
+        - Each beat should describe a DISTINCT scene or movement — different location OR clearly different situation from the previous beat.
         - CRITICAL: For each beat, you MUST specify what the character(s) SAY in that scene.
           If the prose has no dialogue, INVENT realistic dialogue that fits the scene and character.
           Format: "Beat N: [action description] — [CHARACTER NAME] says: '[invented dialogue line]'"
         - Every beat MUST include a spoken line. Beats with no dialogue are invalid.
+
+        [STRICT DEDUPLICATION RULES — violations will cause script failure]
+        1. SLEEP/DREAM LIMIT: If the prose contains scenes of sleeping, dreaming, or waking up, combine them into ONE beat maximum. Do NOT create multiple beats for "wakes from nightmare", "wakes from dream", "another nightmare", etc. Merge all such scenes into a single beat.
+        2. NO REPEATED SITUATIONS: Each beat must advance the story to a NEW situation. If two consecutive events happen in the same location with the same emotional tone, merge them into one beat. Writing the same hesitation, realization, or awakening twice is an error.
+        3. LOCATION TRANSITIONS: Whenever the prose shifts to a clearly different location (e.g., alley → school → training ground), that transition MUST be captured as a distinct beat. Do not skip location changes.
+        4. MAXIMUM 12 BEATS: If you have more than 12 raw events, merge the most similar ones until you have 12 or fewer.
+
         - Return ONLY a JSON array of strings.
 
         [CHARACTER CONTEXT]
