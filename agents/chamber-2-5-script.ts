@@ -483,7 +483,8 @@ ${chunk}
                         console.warn(`>>> [V141 Fallback] Chunk ${i + 1} still at ${(finalDensity * 100).toFixed(1)}% after expansion. Running programmatic injection...`);
                         content = await injectDialoguePass(content, charContext, model, canonicalNames);
                     }
-                    console.log(`>>> [V141] Chunk ${i + 1} FINAL dialogue density: ${(getDialogueDensity(content) * 100).toFixed(1)}%`);
+                    // V175: use rawMode=true so V173 penalty doesn't re-apply after V142 injection
+                    console.log(`>>> [V141] Chunk ${i + 1} FINAL dialogue density: ${(getDialogueDensity(content, true) * 100).toFixed(1)}%`);
 
                     // V145: Consecutive slugline violation check + V147 auto-fix
                     if (content) {
@@ -609,10 +610,8 @@ ${chunk}
         // V166: Intra-script time regression fix — auto-correct backward time jumps
         fullScript = fixTimeRegression(fullScript);
 
-        // V167: Forbidden dialogue pattern scanner — detects clichéd consolation lines
-        // that the generation prompt explicitly forbids but the model occasionally still produces.
-        // Read-only: logs warnings only. Does not modify the script.
-        scanForbiddenPatterns(fullScript);
+        // V167: Forbidden dialogue pattern fixer — detects and replaces clichéd lines
+        fullScript = fixForbiddenPatterns(fullScript);
 
         // V160: Fix unnumbered bare slug lines embedded in scene bodies
         fullScript = fixUnnumberedSlugs(fullScript);
@@ -1362,7 +1361,9 @@ function hasDialogue(content: string): boolean {
  * Strategy 1: standard format (standalone name header)
  * Strategy 2: prose-embedded format — counts sentences with speech endings as dialogue
  */
-function getDialogueDensity(content: string): number {
+// V175: rawMode=true skips the V173 monologue penalty — used for final FINAL logging
+// after V142 injection where we know injection already ran and further retries won't help.
+function getDialogueDensity(content: string, rawMode = false): number {
     const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
     let dialogueLines = 0;
     let totalLines = 0;
@@ -1388,8 +1389,9 @@ function getDialogueDensity(content: string): number {
     if (dialogueLines > 0) {
         const rawDensity = Math.min(1.0, dialogueLines / Math.max(1, totalLines));
         // V173: monologue penalty — single speaker = internal monologue, not exchange dialogue
-        // Apply 50% penalty so V141 fallback (threshold 15%) triggers correctly
-        if (speakers.size <= 1) {
+        // Apply 50% penalty so V141 fallback (threshold 15%) triggers correctly.
+        // rawMode bypasses penalty (used for final logging after V142 injection).
+        if (!rawMode && speakers.size <= 1) {
             const soloName = [...speakers][0] ?? '?';
             console.warn(`>>> [V173 Monologue] Single speaker "${soloName}" — applying 50% monologue penalty (${(rawDensity * 100).toFixed(1)}% → ${(rawDensity * 50).toFixed(1)}%).`);
             return rawDensity * 0.5;
@@ -2152,45 +2154,48 @@ function extractCanonicalNamesFromContext(charContext: string): string[] {
 }
 
 /**
- * V167: Forbidden Dialogue Pattern Scanner
- * Scans the assembled script for clichéd consolation/solidarity dialogue patterns
- * that the prompt explicitly forbids but the model occasionally still generates.
- * Read-only — logs warnings only; does not modify the script.
+ * V167: Forbidden Dialogue Pattern Fixer
+ * Detects clichéd consolation/solidarity dialogue patterns and replaces them with
+ * non-clichéd alternatives. Previously read-only; now auto-corrects.
  *
- * Each entry is a [label, regex] pair. Regex is matched against the full script.
+ * Each entry: [label, findRegex, replacement]
  */
-function scanForbiddenPatterns(script: string): void {
-    const FORBIDDEN: Array<[string, RegExp]> = [
-        // Solidarity/consolation clichés
-        ['우리가 있잖아',            /우리가 있잖아/],
-        ['내가 옆에 있잖아',         /내가 옆에 있잖아/],
-        ['네가 있어서 정말 다행',     /네가 있어서 정말 다행/],
-        ['너희들이 있어서 정말 다행', /너희들이 있어서 정말 다행/],
-        ['혼자가 아니야',            /혼자가 아니[야에]/],
-        ['혼자 짊어지지 마',         /혼자\s*짊어지/],
-        ['우리가 함께할게',          /우리가\s*함께할/],
-        ['함께라면 무엇이든',        /함께라면\s*무엇이든/],
-        ['함께니까',                 /함께니까/],
-        // Encouragement clichés
-        ['포기하지 마',              /포기하지 마[.!]?/],
-        ['넌 할 수 있어',            /넌 할 수 있어[.!]?/],
-        ['할 수 있을 거야',          /할 수 있을 거[야야]?[.!]?/],
-        // Gratitude-relief combos
-        ['고마워.+다행이야',         /고마워.{0,20}다행이야/],
-        ['다행이야.+고마워',         /다행이야.{0,20}고마워/],
+function fixForbiddenPatterns(script: string): string {
+    const FORBIDDEN: Array<[string, RegExp, string]> = [
+        // Solidarity/consolation clichés → direct/action-oriented alternatives
+        ['우리가 있잖아',            /우리가 있잖아/g,                      '여기 있어.'],
+        ['내가 옆에 있잖아',         /내가 옆에 있잖아/g,                   '여기 있어.'],
+        ['네가 있어서 정말 다행',     /네가 있어서 정말 다행이야/g,          '같이 해결하면 돼.'],
+        ['너희들이 있어서 정말 다행', /너희들이 있어서 정말 다행이야/g,      '같이 움직이자.'],
+        ['혼자가 아니야',            /혼자가 아니[야에][.!]?/g,             '같이 해결하자.'],
+        ['혼자 짊어지지 마',         /혼자\s*짊어지지?\s*마[.!]?/g,         '움직이자. 같이.'],
+        ['우리가 함께할게',          /우리가\s*함께할게[.!]?/g,             '따라와.'],
+        ['함께라면 무엇이든',        /함께라면\s*무엇이든[^.!?]*/g,         '같이 움직이자.'],
+        ['함께니까',                 /함께니까[.!]?/g,                      '같이 가자.'],
+        // Encouragement clichés → concrete alternatives
+        ['포기하지 마',              /포기하지\s*마[.!]?/g,                 '앞으로 가.'],
+        ['넌 할 수 있어',            /넌\s*할 수 있어[.!]?/g,               '해내는 거야.'],
+        ['할 수 있을 거야',          /할 수 있을 거[야야]?[.!]?/g,          '반드시 해내야 해.'],
+        // Gratitude-relief combos — replace entire matched segment
+        ['고마워.+다행이야',         /고마워(.{0,20})다행이야[.!]?/g,       '고마워.'],
+        ['다행이야.+고마워',         /다행이야(.{0,20})고마워[.!]?/g,       '고마워.'],
     ];
 
+    let result = script;
     const hits: string[] = [];
-    for (const [label, re] of FORBIDDEN) {
-        if (re.test(script)) hits.push(label);
+    for (const [label, re, replacement] of FORBIDDEN) {
+        if (re.test(result)) {
+            result = result.replace(re, replacement);
+            hits.push(label);
+        }
     }
 
     if (hits.length > 0) {
-        console.warn(`>>> [V167 Forbidden Patterns] ${hits.length} forbidden dialogue pattern(s) detected: ${hits.join(' | ')}`);
-        console.warn(`>>> [V167] These patterns are in the prompt's FORBIDDEN list but were generated anyway. Consider a targeted scene re-roll.`);
+        console.warn(`>>> [V167 Forbidden Patterns] Fixed ${hits.length} pattern(s): ${hits.join(' | ')}`);
     } else {
         console.log(`>>> [V167 Forbidden Patterns] OK — no forbidden patterns detected.`);
     }
+    return result;
 }
 
 /**
@@ -2300,10 +2305,56 @@ function fixAnonymousProtagonist(script: string): string {
 }
 
 /**
+ * V175: Build an alias map from charContext English-name romanizations.
+ * Handles cases like "강이현 (Kim Hae-ri)" where the English name back-romanizes to "김해리"
+ * — a completely different Korean name that the model may use in later chunks.
+ */
+function buildEnglishNameAliasMap(charContext: string): Map<string, string> {
+    // Common Korean surname romanizations → Hangul
+    const KO_SURNAMES: Record<string, string> = {
+        'kim': '김', 'park': '박', 'pak': '박', 'choi': '최', 'choe': '최',
+        'kang': '강', 'gang': '강', 'lee': '이', 'yi': '이', 'rhee': '이', 'li': '이',
+        'jung': '정', 'jeong': '정', 'jeon': '전', 'han': '한', 'oh': '오',
+        'seo': '서', 'ko': '고', 'koh': '고', 'yoon': '윤', 'shin': '신',
+        'lim': '임', 'im': '임', 'ahn': '안', 'an': '안', 'jang': '장',
+        'yoo': '유', 'yu': '유', 'cho': '조', 'joo': '주', 'baek': '백',
+        'song': '송', 'yang': '양', 'kwon': '권', 'moon': '문',
+        'nam': '남', 'ryu': '류', 'bae': '배', 'cha': '차', 'chun': '천',
+    };
+    // Common given-name syllable romanizations → Hangul
+    const KO_SYLLABLES: Record<string, string> = {
+        'hae': '해', 'ri': '리', 'do': '도', 'hyun': '현', 'ro': '로', 'un': '운',
+        'hye': '혜', 'mi': '미', 'jun': '준', 'hyuk': '혁', 'su': '수', 'jin': '진',
+        'young': '영', 'min': '민', 'soo': '수', 'na': '나', 'ra': '라', 'ha': '하',
+        'won': '원', 'woo': '우', 'jae': '재', 'ji': '지', 'in': '인', 'yun': '윤',
+        'ho': '호', 'ki': '기', 'gi': '기', 'kyung': '경', 'sung': '성',
+        'tae': '태', 'uk': '욱', 'wook': '욱', 'bin': '빈',
+    };
+
+    const aliasMap = new Map<string, string>();
+    // Parse "- 이름 (EnglishName):" entries
+    for (const m of charContext.matchAll(/[-•]\s*([가-힣]{2,4})\s+\(([A-Za-z][A-Za-z\s-]+)\)/g)) {
+        const korName = m[1];
+        const engName = m[2].trim().toLowerCase().replace(/-/g, ' ');
+        const parts = engName.split(/\s+/).filter(Boolean);
+        if (parts.length < 2) continue;
+        const koSurname = KO_SURNAMES[parts[0]];
+        if (!koSurname) continue;
+        let koGiven = '';
+        for (const part of parts.slice(1)) koGiven += KO_SYLLABLES[part] ?? '';
+        if (!koGiven) continue;
+        const koAlias = koSurname + koGiven;
+        if (koAlias !== korName) aliasMap.set(koAlias, korName);
+    }
+    return aliasMap;
+}
+
+/**
  * V164: Character Name Normalization
  * Detects surname drift across chunks (e.g. "김해리" → "도해리") and corrects it.
  *
  * Algorithm:
+ * 0. [V175] Apply alias map from charContext English names first (catches "강이현↔김해리")
  * 1. Extract all 3-char Korean names used in the script (surname 1 char + given name 2 chars).
  * 2. Group names by their 2-char given name (chars 1-2 of the 3-char name).
  * 3. If two names share the same given name but differ in surname, the one appearing MORE
@@ -2313,6 +2364,17 @@ function fixAnonymousProtagonist(script: string): string {
  * Also extracts known names from charContext to bias the canonical selection.
  */
 function normalizeCharacterNames(script: string, charContext: string): string {
+    // V175: Apply alias map FIRST — catches English-romanized name aliases across chunks
+    const aliasMap = buildEnglishNameAliasMap(charContext);
+    let result = script;
+    for (const [alias, canonical] of aliasMap) {
+        const re = new RegExp(alias, 'g');
+        const count = (result.match(re) || []).length;
+        if (count > 0) {
+            result = result.replace(re, canonical);
+            console.warn(`>>> [V175 Alias Fix] "${alias}" → "${canonical}" (${count} occurrence(s))`);
+        }
+    }
     // --- EXTRACTION STRATEGY ---
     // Only consider a word a "character name" if it appears as:
     //   A) Action subject:  "이름," (name followed by comma — the Korean screenplay actor pattern)
@@ -2323,8 +2385,9 @@ function normalizeCharacterNames(script: string, charContext: string): string {
     const counts = new Map<string, number>();
 
     // A) Action subject pattern: "이름," — most reliable character name indicator
+    // Note: scan `result` (post-V175 alias replacement) so counts reflect fixed names
     const actionSubjectRe = /([가-힣]{2,4}),/g;
-    for (const m of script.matchAll(actionSubjectRe)) {
+    for (const m of result.matchAll(actionSubjectRe)) {
         const n = m[1];
         if (EXCLUDED_WORDS.has(n)) continue;
         counts.set(n, (counts.get(n) ?? 0) + 1);
@@ -2336,8 +2399,8 @@ function normalizeCharacterNames(script: string, charContext: string): string {
         counts.set(n, (counts.get(n) ?? 0) + 5);
     }
 
-    // B) Dialogue header lines: standalone name on its own line
-    for (const line of script.split('\n')) {
+    // B) Dialogue header lines: standalone name on its own line (scan result, not script)
+    for (const line of result.split('\n')) {
         const t = line.trim();
         if (/^[가-힣]{2,4}$/.test(t) && !EXCLUDED_WORDS.has(t)) {
             counts.set(t, (counts.get(t) ?? 0) + 1);
@@ -2366,7 +2429,7 @@ function normalizeCharacterNames(script: string, charContext: string): string {
         byGivenName.set(given, arr);
     }
 
-    let result = script;
+    // result already has V175 alias replacements applied — continue on that
     let fixed = 0;
     for (const [given, variants] of byGivenName) {
         if (variants.length < 2) continue;
