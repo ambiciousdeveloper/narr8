@@ -350,8 +350,12 @@ export class ScriptScribe {
                     if (content && (content.length < sectionLengthTarget * 0.90 || density < 0.20)) {
                         const shortage = sectionLengthTarget - content.length;
                         console.warn(`>>> [V143 Expansion Pass] Chunk ${i + 1}: ${content.length}/${sectionLengthTarget} chars, density ${(density * 100).toFixed(1)}%. Expanding...`);
+                        // V171 fix: if confirmed skeleton exists, list its sluglines so expansion cannot add new scenes
+                        const confirmedSlugNote = confirmedSlots.length > 0
+                            ? `\n⛔ CONFIRMED SCENE LIST (from source novel — DO NOT add scenes beyond this list):\n${confirmedSlots.map(s => `  S# ${s.n}. ${s.intExt}. ${s.location} - ${s.timeOfDay}`).join('\n')}\nYou may ONLY expand content within the scenes listed above. Creating S# ${confirmedSlots[confirmedSlots.length - 1].n + 1} or any new scene number is FORBIDDEN.\n`
+                            : '';
                         const expandPrompt = `You are a professional Korean screenplay writer. The following screenplay is too short AND has too little dialogue. Expand it by adding MORE DIALOGUE EXCHANGES between characters. Target: approximately ${sectionLengthTarget} total characters.
-
+${confirmedSlugNote}
 RULES:
 1. Add dialogue after every 2-3 action lines: character name alone on one line, spoken text on the next.
 2. Characters must speak — to each other, to themselves, or to the situation aloud.
@@ -361,7 +365,7 @@ RULES:
    × "복잡한 감정", "마치 ~같았다", any sentence about thoughts/emotions without a physical act
    If you encounter these in the existing text, REPLACE them with a physical action or dialogue line.
 4. Keep all existing scene sluglines (S# N. ...) intact. Write in Korean only.
-5. Add approximately ${shortage} more characters through dialogue.
+5. Add approximately ${shortage} more characters through dialogue — WITHIN existing scenes only.
 6. LOCATION VARIETY CHECK: If 3 or more consecutive scenes share the exact same slugline, you MUST change at least one of them to a neighboring sub-location (append "계단", "안쪽", "입구", etc. to the place name) or shift the time label (새벽 → 이른 아침). Identical sluglines repeated 3+ times in a row is a formatting error.
 7. SOLO SCENE CHECK: If a character is alone for 3 or more consecutive scenes, add another character appearing briefly (knock on door, phone call, passer-by) to break the solo streak.
 
@@ -382,8 +386,11 @@ Output the full expanded screenplay in Korean S# format.`;
                         if (content && content.length < sectionLengthTarget * 0.70) {
                             const shortage2 = sectionLengthTarget - content.length;
                             console.warn(`>>> [V143B 2nd Expansion] Chunk ${i + 1}: ${content.length}/${sectionLengthTarget} chars after 1st expansion. Running 2nd pass...`);
+                            const confirmedSlugNote2 = confirmedSlots.length > 0
+                                ? `\n⛔ CONFIRMED SCENE LIST — do NOT create scenes beyond this list:\n${confirmedSlots.map(s => `  S# ${s.n}. ${s.intExt}. ${s.location} - ${s.timeOfDay}`).join('\n')}\n`
+                                : '';
                             const expandPrompt2 = `You are a professional Korean screenplay writer. The following screenplay needs MORE content to reach the target length of ${sectionLengthTarget} characters. It is currently only ${content.length} characters.
-
+${confirmedSlugNote2}
 TASK: Add ${shortage2} more characters by expanding EXISTING scenes — NOT adding new plot events.
 - Extend dialogue exchanges: add 2-3 more turns per existing conversation
 - Add reaction shots and physical detail to action lines
@@ -456,9 +463,10 @@ ${chunk}
                         }
                     }
 
-                    // V141 final density after all passes — if still 0%, use programmatic injection
+                    // V141 final density after all passes — if still < 15%, use programmatic injection
+                    // (raised from 5% → 15% to catch the 8.5% case that slipped through)
                     const finalDensity = content ? getDialogueDensity(content) : 0;
-                    if (content && finalDensity < 0.05) {
+                    if (content && finalDensity < 0.15) {
                         console.warn(`>>> [V141 Fallback] Chunk ${i + 1} still at ${(finalDensity * 100).toFixed(1)}% after expansion. Running programmatic injection...`);
                         content = await injectDialoguePass(content, charContext, model);
                     }
@@ -585,8 +593,8 @@ ${chunk}
         // V157: Remove duplicate transition lines between consecutive scenes
         fullScript = removeDuplicateSceneTransitions(fullScript);
 
-        // V166: Intra-script time regression check — warn on backward time jumps within a single chunk
-        detectTimeRegression(fullScript);
+        // V166: Intra-script time regression fix — auto-correct backward time jumps
+        fullScript = fixTimeRegression(fullScript);
 
         // V167: Forbidden dialogue pattern scanner — detects clichéd consolation lines
         // that the generation prompt explicitly forbids but the model occasionally still produces.
@@ -2060,7 +2068,21 @@ function extractCanonicalNamesFromContext(charContext: string): string[] {
         const n = m[1];
         if (!EXCLUDED_WORDS.has(n)) counts.set(n, (counts.get(n) ?? 0) + 2); // slightly boosted
     }
+    // Pattern D: "- 이름 (" bullet-point with parenthetical English name
+    // e.g. "- 김해리 (Kim Hae-ri):", "- 백산 (Choi Dohyun):"
+    for (const m of charContext.matchAll(/[-•]\s*([가-힣]{2,4})\s+\(/g)) {
+        const n = m[1];
+        if (!EXCLUDED_WORDS.has(n)) counts.set(n, (counts.get(n) ?? 0) + 3); // high boost — primary roster format
+    }
+    // Pattern E: possessive/object marker "이름의|이름을|이름이|이름은|이름을|이름에게"
+    // catches names in description text like "해리의 잠재력", "해리를 돕는"
+    for (const m of charContext.matchAll(/([가-힣]{2,4})(?:의|을|이|은|를|에게|과|와)\s/g)) {
+        const n = m[1];
+        if (!EXCLUDED_WORDS.has(n) && n.length >= 2) counts.set(n, (counts.get(n) ?? 0) + 1);
+    }
 
+    // V168 fix: lower threshold to 1 for Pattern D names (they are definitively canonical)
+    // Names with Pattern D boost (≥3 initial) pass even with threshold=2
     return [...counts.entries()]
         .filter(([_, count]) => count >= 2)
         .sort((a, b) => b[1] - a[1])
@@ -2110,47 +2132,58 @@ function scanForbiddenPatterns(script: string): void {
 }
 
 /**
- * V166: Intra-Script Time Regression Detector
- * Scans all sluglines in sequence and logs any case where time-of-day moves BACKWARD
- * without an explicit time-skip marker ("다음 날", "몇 시간 후", etc.) in the preceding scene body.
- *
- * Does NOT modify the script — reports only. Fixes must be done in the generation prompt.
+ * V166: Intra-Script Time Regression Fixer
+ * Scans all sluglines in sequence. When time-of-day moves BACKWARD without a skip marker,
+ * replaces the regressed time label with the forward-flowing continuation of the previous time.
  * Time order: 낮 → 저녁 → 밤 → 새벽 → 아침 → 낮 (next day)
+ * Forward-next map: 낮→저녁, 저녁→밤, 밤→새벽, 새벽→이른 아침, 아침→낮
  */
-function detectTimeRegression(script: string): void {
+function fixTimeRegression(script: string): string {
     const TIME_ORDER = ['낮', '저녁', '밤', '새벽', '아침'];
+    const FORWARD_NEXT: Record<string, string> = {
+        '낮': '저녁', '저녁': '밤', '밤': '새벽', '새벽': '이른 아침', '아침': '낮'
+    };
     const SKIP_MARKERS = ['다음 날', '몇 시간 후', '다음날', '며칠 후', '이튿날', '그 다음 날'];
-    const slugRe = /^S#\s*\d+[A-Za-z가-힣]?\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*(.+)$/gm;
+    const SLUG_RE = /^(S#\s*\d+[A-Za-z가-힣]?\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*)(\S+)(.*)/m;
 
-    const entries: Array<{ sceneNum: string; time: string; pos: number }> = [];
-    for (const m of script.matchAll(/^(S#\s*\d+[A-Za-z가-힣]?)\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*(\S+)/gm)) {
-        const time = m[2]?.trim() ?? '';
-        const matchedTime = TIME_ORDER.find(t => time.includes(t));
-        if (matchedTime) entries.push({ sceneNum: m[1], time: matchedTime, pos: m.index ?? 0 });
+    // Collect all slugline positions and their matched times
+    const entries: Array<{ time: string; matchIdx: number; fullMatch: string; pre: string; post: string }> = [];
+    const globalRe = /^(S#\s*\d+[A-Za-z가-힣]?\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*)(\S+)(.*)/gm;
+    for (const m of script.matchAll(globalRe)) {
+        const timeToken = m[2]?.trim() ?? '';
+        const matched = TIME_ORDER.find(t => timeToken.includes(t));
+        if (matched) {
+            entries.push({ time: matched, matchIdx: m.index ?? 0, fullMatch: m[0], pre: m[1], post: m[3] ?? '' });
+        }
     }
 
-    let regressions = 0;
-    for (let i = 1; i < entries.length; i++) {
+    let fixed = script;
+    let fixCount = 0;
+    // Iterate in reverse order so string replacement offsets don't drift
+    for (let i = entries.length - 1; i >= 1; i--) {
         const prev = entries[i - 1];
         const curr = entries[i];
         const prevIdx = TIME_ORDER.indexOf(prev.time);
         const currIdx = TIME_ORDER.indexOf(curr.time);
-        // Regression: current time-of-day is "earlier" in the day cycle than previous
-        // Allow wrap-around (새벽→아침→낮 = forward), only flag true backward jumps
-        const isRegression = currIdx < prevIdx && !(prevIdx >= 3 && currIdx <= 1); // allow 새벽/아침 → 낮 (next day)
-        if (isRegression) {
-            // Check if there's a skip marker in the scene body between prev and curr
-            const between = script.substring(prev.pos, curr.pos);
-            const hasSkip = SKIP_MARKERS.some(marker => between.includes(marker));
-            if (!hasSkip) {
-                console.warn(`>>> [V166 Time Regression] ${curr.sceneNum}: ${prev.time} → ${curr.time} (backward, no skip marker)`);
-                regressions++;
-            }
-        }
+        const isRegression = currIdx < prevIdx && !(prevIdx >= 3 && currIdx <= 1);
+        if (!isRegression) continue;
+        // Check skip marker in the text between prev and curr sluglines
+        const between = fixed.substring(prev.matchIdx, curr.matchIdx);
+        if (SKIP_MARKERS.some(m => between.includes(m))) continue;
+        // Compute the corrected time: one step forward from prev.time
+        const correctedTime = FORWARD_NEXT[prev.time] ?? prev.time;
+        // Replace only the time token in the current slugline
+        const correctedSlug = curr.pre + correctedTime + curr.post;
+        fixed = fixed.substring(0, curr.matchIdx) + correctedSlug + fixed.substring(curr.matchIdx + curr.fullMatch.length);
+        console.warn(`>>> [V166 Time Regression] ${curr.fullMatch.split('.')[0]}: ${prev.time} → ${curr.time} fixed to "${correctedTime}"`);
+        fixCount++;
     }
-    if (regressions === 0) {
+    if (fixCount === 0) {
         console.log(`>>> [V166 Time Regression] OK — no time regressions detected.`);
+    } else {
+        console.warn(`>>> [V166 Time Regression] Fixed ${fixCount} regression(s).`);
     }
+    return fixed;
 }
 
 /**
