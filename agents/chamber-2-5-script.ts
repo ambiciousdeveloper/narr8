@@ -69,6 +69,12 @@ export class ScriptScribe {
 
         console.log(`>>> [ScriptScribe V81 Hardened] beats=${beats.length}, idealSections=${idealSections}, actualSections=${actualSections}, targetPerSection=${sectionLengthTarget}, totalTarget=${totalTargetChars}`);
 
+        // [V168] Pre-generation: extract canonical character names from charContext.
+        // These are injected into EVERY chunk prompt so the AI never drifts to a wrong name.
+        // Extraction is fully deterministic — no AI involvement.
+        const canonicalNames = extractCanonicalNamesFromContext(charContext);
+        console.log(`>>> [V168 Name Roster] Canonical names extracted: [${canonicalNames.join(', ')}]`);
+
         // 3. Unified Generation Loop
         let fullScript = "";
         let finalCharacters: any[] = [];
@@ -106,6 +112,7 @@ export class ScriptScribe {
                     characters: charContext,
                     blueprint: activeBlueprint,
                     settings: worldSettings,
+                    canonicalNames,
                     // V140: Stabilized Continuity Bridge — only last scene to avoid "story already done" hallucination.
                     chronicle: i === 0 ? chronicle : (() => {
                         // Extract only the last scene from fullScript as anchor, not the entire history
@@ -374,55 +381,21 @@ ${chunk}
                             const scanText = actionLines.join(' ');
                             return DREAM_DETECT_V153.some(kw => scanText.includes(kw));
                         }
-                        let dreamBlocks = chunkBlocks.filter(isDreamSceneBlock);
+                        const dreamBlocks = chunkBlocks.filter(isDreamSceneBlock);
                         if (dreamBlocks.length > 1) {
-                            // V153: retry loop — up to 2 consolidation attempts
-                            for (let attempt = 1; attempt <= 2 && dreamBlocks.length > 1; attempt++) {
-                                console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: ${dreamBlocks.length} dream scenes detected (max 1). Consolidation attempt ${attempt}/2...`);
-                                const dreamSceneNums = dreamBlocks.map(b => b.match(/^S#\s*(\d+[A-Za-z]?)\./m)?.[1] ?? '?').join(', ');
-                                const consolidatePrompt = `아래 한국어 시나리오에 악몽/꿈/수면/침대 관련 씬(S#)이 ${dreamBlocks.length}개 포함되어 있습니다 (S# ${dreamSceneNums}). 최대 1개만 허용됩니다.
-규칙:
-1. 악몽/수면/침대 씬 중 가장 극적으로 중요한 씬 1개만 남기고 나머지는 완전히 삭제하세요.
-2. 삭제된 씬 번호를 포함하여 모든 S# 번호를 1부터 순서대로 재정렬하세요.
-3. 씬 내부 대사와 지문은 절대 변경하지 마세요.
-4. 수정된 대본 전체를 그대로 출력하세요. 설명이나 주석을 추가하지 마세요.
-
-대본:
-${content}`;
-                                try {
-                                    const consolidateResult = await generateWithRetry(model, {
-                                        contents: [{ role: 'user', parts: [{ text: consolidatePrompt }] }],
-                                        generationConfig: { temperature: 0.1, maxOutputTokens: 16000 }
-                                    }, `Chunk ${i + 1} V153 dream consolidation attempt ${attempt}`);
-                                    const consolidated = consolidateResult.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
-                                    // Accept if output is >= 60% of original (allows meaningful removal)
-                                    if (consolidated && consolidated.length > content.length * 0.6) {
-                                        content = scrubMeta(consolidated);
-                                        dreamBlocks = content.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim() && isDreamSceneBlock(b));
-                                        console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: attempt ${attempt} → ${dreamBlocks.length} dream scene(s) remaining.`);
-                                    } else {
-                                        console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: attempt ${attempt} output too short (${consolidated.length}/${content.length}), stopping.`);
-                                        break;
-                                    }
-                                } catch (e) {
-                                    console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: attempt ${attempt} error — ${e}.`);
-                                    break;
-                                }
-                            }
-                            if (dreamBlocks.length > 1) {
-                                console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: ${dreamBlocks.length} dream scene(s) remain after retries.`);
-                                // V153 Programmatic Fallback: AI consolidation failed — remove extra dream scenes directly.
-                                // Keep the longest block (most dramatically developed), delete the rest.
-                                const allSceneBlocks = content.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim());
-                                const sortedDreams = [...dreamBlocks].sort((a, b) => b.length - a.length);
-                                const removeDreamSet = new Set(sortedDreams.slice(1));
-                                const filtered = allSceneBlocks.filter(b => !removeDreamSet.has(b));
-                                const patched = filtered.join('');
-                                if (patched && patched.length > content.length * 0.5) {
-                                    content = renumberScenes(patched);
-                                    const remaining = content.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim() && isDreamSceneBlock(b)).length;
-                                    console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: programmatic fallback applied — ${sortedDreams.length - 1} extra dream scene(s) removed. Remaining: ${remaining}`);
-                                }
+                            // V153: Deterministic-only removal — AI consolidation removed.
+                            // AI consolidation (2 retries) had a high failure rate (output too short, wrong format).
+                            // Instead: keep the longest dream block (most developed), remove the rest directly.
+                            console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: ${dreamBlocks.length} dream scene(s) detected (max 1). Removing extras deterministically...`);
+                            const allSceneBlocks = content.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim());
+                            const sortedDreams = [...dreamBlocks].sort((a, b) => b.length - a.length);
+                            const removeDreamSet = new Set(sortedDreams.slice(1)); // keep first (longest)
+                            const filtered = allSceneBlocks.filter(b => !removeDreamSet.has(b));
+                            const patched = filtered.join('');
+                            if (patched && patched.length > content.length * 0.5) {
+                                content = renumberScenes(patched);
+                                const remaining = content.split(/(?=^S#\s*\d+(?:\s*[A-Za-z가-힣]+)?\.)/m).filter(b => b.trim() && isDreamSceneBlock(b)).length;
+                                console.warn(`>>> [V153 Dream Cap] Chunk ${i + 1}: removed ${sortedDreams.length - 1} extra dream scene(s). Remaining: ${remaining}`);
                             }
                         } else {
                             console.log(`>>> [V153 Dream Cap] Chunk ${i + 1}: OK (${dreamBlocks.length} dream scene(s)).`);
@@ -483,6 +456,11 @@ ${content}`;
 
         // V166: Intra-script time regression check — warn on backward time jumps within a single chunk
         detectTimeRegression(fullScript);
+
+        // V167: Forbidden dialogue pattern scanner — detects clichéd consolation lines
+        // that the generation prompt explicitly forbids but the model occasionally still produces.
+        // Read-only: logs warnings only. Does not modify the script.
+        scanForbiddenPatterns(fullScript);
 
         // V160: Fix unnumbered bare slug lines embedded in scene bodies
         fullScript = fixUnnumberedSlugs(fullScript);
@@ -987,7 +965,14 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 ${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
-[CHARACTER DB]
+${p.canonicalNames?.length > 0 ? `🔒 [CHARACTER NAME ROSTER — EXACT SPELLING — MANDATORY]
+The following are the ONLY correct spellings for character names in this script.
+You MUST use these exact names in every action line and dialogue header. No variants, no typos, no surname changes.
+${(p.canonicalNames as string[]).map((n: string) => `  • ${n}`).join('\n')}
+Using any other spelling (e.g. a different surname with the same given name) is a CRITICAL ERROR that causes script corruption.
+🔒 [END NAME ROSTER]
+
+` : ''}[CHARACTER DB]
 ${(p.characters || "").substring(0, 3000)}
 
 [BLUEPRINT CONTEXT]
@@ -1700,6 +1685,72 @@ function fixUnnumberedSlugs(script: string): string {
 }
 
 /**
+ * V168: Canonical Character Name Extractor
+ * Deterministically extracts character names from charContext before generation begins.
+ * Only accepts names that appear ≥2 times in charContext (avoids incidental word matches).
+ * Used to build the NAME ROSTER injected into every chunk prompt.
+ */
+function extractCanonicalNamesFromContext(charContext: string): string[] {
+    const counts = new Map<string, number>();
+
+    // Pattern A: action subject "이름," — e.g. "김해리, 문을 열며"
+    for (const m of charContext.matchAll(/([가-힣]{2,4}),/g)) {
+        const n = m[1];
+        if (!EXCLUDED_WORDS.has(n)) counts.set(n, (counts.get(n) ?? 0) + 1);
+    }
+    // Pattern B: standalone name on its own line (dialogue header format)
+    for (const line of charContext.split('\n')) {
+        const t = line.trim();
+        if (/^[가-힣]{2,4}$/.test(t) && !EXCLUDED_WORDS.has(t)) {
+            counts.set(t, (counts.get(t) ?? 0) + 1);
+        }
+    }
+    // Pattern C: "이름:" label format common in character description sheets
+    for (const m of charContext.matchAll(/([가-힣]{2,4})\s*[:：]/g)) {
+        const n = m[1];
+        if (!EXCLUDED_WORDS.has(n)) counts.set(n, (counts.get(n) ?? 0) + 2); // slightly boosted
+    }
+
+    return [...counts.entries()]
+        .filter(([_, count]) => count >= 2)
+        .sort((a, b) => b[1] - a[1])
+        .map(([name]) => name);
+}
+
+/**
+ * V167: Forbidden Dialogue Pattern Scanner
+ * Scans the assembled script for clichéd consolation/solidarity dialogue patterns
+ * that the prompt explicitly forbids but the model occasionally still generates.
+ * Read-only — logs warnings only; does not modify the script.
+ *
+ * Each entry is a [label, regex] pair. Regex is matched against the full script.
+ */
+function scanForbiddenPatterns(script: string): void {
+    const FORBIDDEN: Array<[string, RegExp]> = [
+        ['우리가 있잖아',         /우리가 있잖아/],
+        ['내가 옆에 있잖아',      /내가 옆에 있잖아/],
+        ['네가 있어서 정말 다행',  /네가 있어서 정말 다행/],
+        ['너희들이 있어서 정말 다행', /너희들이 있어서 정말 다행/],
+        ['포기하지 마',           /포기하지 마[.!]?/],
+        ['넌 할 수 있어',         /넌 할 수 있어[.!]?/],
+        ['고마워.+다행이야',       /고마워.{0,20}다행이야/],
+        ['혼자가 아니야',         /혼자가 아니[야에]/],
+    ];
+
+    const hits: string[] = [];
+    for (const [label, re] of FORBIDDEN) {
+        if (re.test(script)) hits.push(label);
+    }
+
+    if (hits.length > 0) {
+        console.warn(`>>> [V167 Forbidden Patterns] ${hits.length} forbidden dialogue pattern(s) detected: ${hits.join(' | ')}`);
+        console.warn(`>>> [V167] These patterns are in the prompt's FORBIDDEN list but were generated anyway. Consider a targeted scene re-roll.`);
+    } else {
+        console.log(`>>> [V167 Forbidden Patterns] OK — no forbidden patterns detected.`);
+    }
+}
+
+/**
  * V166: Intra-Script Time Regression Detector
  * Scans all sluglines in sequence and logs any case where time-of-day moves BACKWARD
  * without an explicit time-skip marker ("다음 날", "몇 시간 후", etc.) in the preceding scene body.
@@ -1804,25 +1855,50 @@ function fixAnonymousProtagonist(script: string): string {
  * Also extracts known names from charContext to bias the canonical selection.
  */
 function normalizeCharacterNames(script: string, charContext: string): string {
-    // Extract all 3-char Korean names that appear with action suffix (name + comma OR name + 은/는/이/가)
-    const nameRe = /([가-힣]{3})(?=[,은는이가\s])/g;
+    // --- EXTRACTION STRATEGY ---
+    // Only consider a word a "character name" if it appears as:
+    //   A) Action subject:  "이름," (name followed by comma — the Korean screenplay actor pattern)
+    //   B) Dialogue header: standalone line matching /^[가-힣]{2,4}$/ (name alone on its own line)
+    // This excludes ALL common Korean words (소리, 마음, 여기, 앞으로, 나에게, etc.)
+    // which never appear before a comma as an action subject.
+
     const counts = new Map<string, number>();
-    for (const m of script.matchAll(nameRe)) {
+
+    // A) Action subject pattern: "이름," — most reliable character name indicator
+    const actionSubjectRe = /([가-힣]{2,4}),/g;
+    for (const m of script.matchAll(actionSubjectRe)) {
         const n = m[1];
         if (EXCLUDED_WORDS.has(n)) continue;
         counts.set(n, (counts.get(n) ?? 0) + 1);
     }
-
-    // Also collect known names from charContext to boost their canonical weight
-    for (const m of charContext.matchAll(nameRe)) {
+    // Also scan charContext for known names (boosts canonical selection)
+    for (const m of charContext.matchAll(actionSubjectRe)) {
         const n = m[1];
         if (EXCLUDED_WORDS.has(n)) continue;
-        counts.set(n, (counts.get(n) ?? 0) + 5); // bias toward known names
+        counts.set(n, (counts.get(n) ?? 0) + 5);
     }
 
-    if (counts.size < 2) return script; // nothing to compare
+    // B) Dialogue header lines: standalone name on its own line
+    for (const line of script.split('\n')) {
+        const t = line.trim();
+        if (/^[가-힣]{2,4}$/.test(t) && !EXCLUDED_WORDS.has(t)) {
+            counts.set(t, (counts.get(t) ?? 0) + 1);
+        }
+    }
 
-    // Group by given name (last 2 chars of 3-char name)
+    // Require ≥3 total occurrences to qualify as a real character name
+    // (prevents single-use words or rare occurrences from being treated as names)
+    for (const [name, count] of counts.entries()) {
+        if (count < 3) counts.delete(name);
+    }
+
+    if (counts.size < 2) {
+        console.log(`>>> [V164 Name Norm] No surname drift candidates (< 2 qualifying names).`);
+        return script;
+    }
+
+    // Group by given name (last 2 chars of 3-char name, or full name for 2-char names)
+    // Only process 3-char names (1 surname + 2 given) — the most common Korean name form
     const byGivenName = new Map<string, string[]>();
     for (const name of counts.keys()) {
         if (name.length !== 3) continue;
