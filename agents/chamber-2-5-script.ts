@@ -9,6 +9,112 @@ import {
     DEFAULT_SCRIPT_SCENE_AVG_CHARS,
 } from '../lib/constants';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// V171: SceneSlot — 원작 소설에서 추출한 확정 씬 구조
+// ─────────────────────────────────────────────────────────────────────────────
+interface SceneSlot {
+    n: number;           // 확정 씬 번호 (S# n)
+    intExt: 'INT' | 'EXT';
+    location: string;    // 한국어 장소명
+    timeOfDay: string;   // 밤|낮|새벽|아침|저녁|오후|오전 등
+    characters: string[]; // 이 씬에 등장하는 캐릭터명
+    beat: string;        // 핵심 사건 1문장
+}
+
+/**
+ * V171: Scene Slot Extractor
+ * 원작 소설 단락(slicedRef)을 분석해 확정 씬 구조(SceneSlot[])를 추출한다.
+ * AI를 사용하지만 temperature=0으로 결정론적으로 동작하며, 실패 시 빈 배열을 반환해 graceful fallback.
+ */
+async function extractSceneSlots(
+    novelProse: string,
+    canonicalNames: string[],
+    model: any,
+    startSceneNumber: number,
+    maxScenes: number
+): Promise<SceneSlot[]> {
+    if (!novelProse || novelProse.trim().length < 80) return [];
+
+    const nameHint = canonicalNames.length > 0
+        ? `등장 가능한 캐릭터 이름: ${canonicalNames.slice(0, 10).join(', ')}`
+        : '';
+
+    const prompt = `다음 소설 단락을 읽고 씬 구조를 추출하세요.
+장소 변화, 시간 변화, 핵심 등장인물 변화가 있을 때마다 새 씬으로 구분하세요.
+최대 ${maxScenes}개 씬까지만 추출하세요.
+${nameHint}
+
+규칙:
+- intExt: 실내면 "INT", 실외면 "EXT"
+- location: 한국어 장소명 (예: "서울 뒷골목", "천도당 내부")
+- timeOfDay: 밤|낮|새벽|아침|저녁|오후|오전 중 하나
+- characters: 이 씬에서 실제로 행동하거나 대화하는 인물 이름 배열
+- beat: 이 씬의 핵심 사건을 한 문장으로
+
+JSON 배열만 출력 (다른 텍스트 없이):
+[{"intExt":"INT","loc":"장소명","time":"밤","chars":["이름"],"beat":"핵심 사건"}]
+
+소설:
+${novelProse.substring(0, 2500)}`;
+
+    try {
+        const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.0, maxOutputTokens: 600 }
+        });
+        const raw = result.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
+        const arrStart = raw.indexOf('[');
+        const arrEnd = raw.lastIndexOf(']');
+        if (arrStart === -1 || arrEnd === -1) {
+            console.warn(`>>> [V171] Scene slot extraction: no JSON array found.`);
+            return [];
+        }
+        const parsed = JSON.parse(raw.substring(arrStart, arrEnd + 1));
+        if (!Array.isArray(parsed) || parsed.length === 0) return [];
+
+        return parsed
+            .slice(0, maxScenes)
+            .map((s: any, idx: number): SceneSlot => ({
+                n: startSceneNumber + idx,
+                intExt: (String(s.intExt || 'INT').toUpperCase() === 'EXT') ? 'EXT' : 'INT',
+                location: String(s.loc || s.location || '').trim() || '장소 미상',
+                timeOfDay: String(s.time || s.timeOfDay || '').trim() || '낮',
+                characters: Array.isArray(s.chars || s.characters)
+                    ? (s.chars || s.characters).map(String)
+                    : [],
+                beat: String(s.beat || '').trim(),
+            }));
+    } catch (e) {
+        console.warn(`>>> [V171] Scene slot extraction failed: ${e}`);
+        return [];
+    }
+}
+
+/**
+ * V171: Confirmed Skeleton Formatter
+ * SceneSlot[] → 프롬프트에 삽입할 확정 씬 구조 텍스트
+ */
+function formatConfirmedSkeleton(slots: SceneSlot[], hardMin: number): string {
+    const lines = slots.map(s => {
+        const charList = s.characters.length > 0 ? ` [등장: ${s.characters.join(', ')}]` : '';
+        return `S# ${s.n}. ${s.intExt}. ${s.location} - ${s.timeOfDay}${charList}\n    → ${s.beat}`;
+    }).join('\n');
+
+    return `
+[확정 씬 구조 — 원작 소설 추출 — 수정 불가 ⛔]
+아래 씬 구조(장소·시간·등장인물)는 원작 소설에서 추출된 확정 정보입니다.
+AI는 이 구조를 변경하지 마세요. 지문(action lines)과 대사(dialogue)만 작성하세요.
+
+${lines}
+
+각 씬에서 작성해야 할 것:
+- 물리적 지문 (카메라로 촬영 가능한 것만): 최소 3줄
+- 대사: 최소 1 교환 (캐릭터명 단독 줄 → 대사 줄)
+- 씬 분량: 각 씬 최소 ${hardMin}자 이상
+[확정 씬 구조 끝]
+`;
+}
+
 export class ScriptScribe {
     /**
      * Chamber 2-5: Script Scribe (V80 Architecture)
@@ -107,6 +213,15 @@ export class ScriptScribe {
             let currentTemp = i >= 2 ? 0.5 : 0.6;
             let dialogueRetry = false;
 
+            // V171: Scene Slot Extraction — while 루프 바깥에서 청크당 1회만 실행
+            const skeletonTargetScenesForExtract = Math.max(3, Math.min(6,
+                Math.ceil(sectionLengthTarget / (Number(sceneAvgChars) || 300))
+            ));
+            const confirmedSlots: SceneSlot[] = mode === 'ADAPT_TO_SCRIPT' && slicedRef.trim().length > 80
+                ? await extractSceneSlots(slicedRef, canonicalNames, model, contextState.lastSceneNumber + 1, skeletonTargetScenesForExtract)
+                : [];
+            console.log(`>>> [V171] Chunk ${i + 1}: confirmed slots = ${confirmedSlots.length} (mode=${mode}, refLen=${slicedRef.length})`);
+
             while (retryCount < 3) {
                 // V169: Scene Skeleton — compute before prompt build
                 const skeletonTargetScenes = Math.max(3, Math.min(6,
@@ -128,6 +243,7 @@ export class ScriptScribe {
                     settings: worldSettings,
                     canonicalNames,
                     sceneSkeleton,
+                    confirmedSlots,  // V171: confirmed scene slots from source novel (empty = fallback to V169)
                     // V140: Stabilized Continuity Bridge — only last scene to avoid "story already done" hallucination.
                     chronicle: i === 0 ? chronicle : (() => {
                         // Extract only the last scene from fullScript as anchor, not the entire history
@@ -839,6 +955,15 @@ function buildUnifiedPrompt(p: any): string {
     const targetScenes = Math.max(3, Math.min(6, Math.ceil((p.targetChars || 1500) / avgCharsPerScene)));
     const stopAtScene = nextNum + targetScenes - 1;
 
+    // V171: Confirmed skeleton — replaces V169 density block when extracted from source novel
+    const confirmedSlots: SceneSlot[] = Array.isArray(p.confirmedSlots) && p.confirmedSlots.length > 0
+        ? p.confirmedSlots
+        : [];
+    const hardMin = Math.max(350, Math.floor((p.targetChars || 1500) / Math.max(targetScenes, 1) * 0.85));
+    const confirmedSkeletonBlock = confirmedSlots.length > 0
+        ? formatConfirmedSkeleton(confirmedSlots, hardMin)
+        : '';
+
     const dialogueAlert = p.dialogueRetry ? `
 🚨 DIALOGUE FAILURE ALERT 🚨
 Your previous response was REJECTED because it contained ZERO dialogue lines.
@@ -911,7 +1036,9 @@ Using ${p.protagonistPronouns === '그녀' ? '"그는", "그의", "그를"' : '"
 [[SYSTEM_PROTOCOL]]
 [ROLE]
 Professional Script Adaptor.
-Convert PROSE into a high-density, visual SCREENPLAY in **${langLabel}** ONLY.
+${confirmedSlots.length > 0
+    ? `Your role for this section: **Scene Cinematographer** — the scene structure (sluglines, locations, time, characters) is PRE-CONFIRMED from the source novel. You write ONLY the action lines (physical, filmable) and dialogue for each confirmed scene. Do NOT invent new scenes, skip scenes, or change sluglines.`
+    : `Convert PROSE into a high-density, visual SCREENPLAY in **${langLabel}** ONLY.`}
 ${pronounLock}${timeLock}${locationLock}${dreamBan}${dialogueAlert}${personaBlock}
 [GOLDEN FORMAT SAMPLE — 2-character exchange (this is the standard)]
 S# 10. INT. 낡은 무도장 - 밤
@@ -928,13 +1055,17 @@ S# 10. INT. 낡은 무도장 - 밤
 강태준은 등을 돌린다. 하지만 손이 장갑 쪽으로 천천히 움직인다.
 
 [TARGET VOLUME]
-This section MUST reach **${p.targetChars} characters** total. Write exactly ${targetScenes} scenes: S# ${nextNum} through S# ${stopAtScene}.
-- HARD STOP: Do NOT write S# ${stopAtScene + 1} or beyond. Stop exactly at S# ${stopAtScene}.
+This section MUST reach **${p.targetChars} characters** total. ${confirmedSlots.length > 0
+    ? `Write the ${confirmedSlots.length} confirmed scenes listed below (S# ${nextNum} through S# ${nextNum + confirmedSlots.length - 1}).`
+    : `Write exactly ${targetScenes} scenes: S# ${nextNum} through S# ${stopAtScene}.`}
+- ${confirmedSlots.length > 0
+    ? `HARD STOP: Do NOT write beyond S# ${nextNum + confirmedSlots.length - 1}. The scene structure is FIXED — do not add or remove scenes.`
+    : `HARD STOP: Do NOT write S# ${stopAtScene + 1} or beyond. Stop exactly at S# ${stopAtScene}.`}
 - Each scene MUST have at least 4 action lines + 2 dialogue exchanges. One-liner scenes are INVALID.
 - Expand each scene with physical detail, reaction shots, and dialogue to fill the target length.
 - MINIMUM LENGTH ENFORCEMENT: If you finish all scenes and your total output is less than ${Math.floor((p.targetChars || 1500) * 0.85)} characters, go back and expand the shortest scenes — add more action lines, more dialogue turns, more environmental detail — until you reach the minimum. Do NOT stop early.
 - COVER ONLY the story beats listed in [STORY BEATS]. Do NOT advance to events not in those beats.
-${p.sceneSkeleton ? p.sceneSkeleton : ''}
+${confirmedSlots.length > 0 ? confirmedSkeletonBlock : (p.sceneSkeleton ? p.sceneSkeleton : '')}
 
 [MANDATORY RULES]
 1. **SCENE NUMBERING**: You MUST start the content with "S# ${nextNum}.". Use format "S# N. [PLACE] - [TIME]".
