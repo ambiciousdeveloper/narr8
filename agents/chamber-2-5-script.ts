@@ -481,7 +481,7 @@ ${chunk}
                     const finalDensity = content ? getDialogueDensity(content) : 0;
                     if (content && finalDensity < 0.15) {
                         console.warn(`>>> [V141 Fallback] Chunk ${i + 1} still at ${(finalDensity * 100).toFixed(1)}% after expansion. Running programmatic injection...`);
-                        content = await injectDialoguePass(content, charContext, model);
+                        content = await injectDialoguePass(content, charContext, model, canonicalNames);
                     }
                     console.log(`>>> [V141] Chunk ${i + 1} FINAL dialogue density: ${(getDialogueDensity(content) * 100).toFixed(1)}%`);
 
@@ -589,7 +589,7 @@ ${chunk}
         // V142: Post-process dialogue injection — final safety net if all retries failed
         if (!hasDialogue(fullScript)) {
             console.warn(`>>> [V142 Dialogue Injection] All retries produced no dialogue. Running dedicated injection pass...`);
-            fullScript = await injectDialoguePass(fullScript, charContext, model);
+            fullScript = await injectDialoguePass(fullScript, charContext, model, canonicalNames);
         }
 
         // V164: Character name normalization — fix surname drift across chunks
@@ -701,6 +701,10 @@ ${chunk}
                 console.log(`>>> [V153 Full-Script Dream Cap] OK (${dreamBlocks.length}/${FULL_DREAM_MAX} dream scene(s)).`);
             }
         }
+
+        // V166 (2nd pass): Re-run AFTER V153 Full-Script Dream Cap, which removes/renumbers scenes
+        // and can introduce new time regressions that the earlier V166 pass never saw.
+        fullScript = fixTimeRegression(fullScript);
 
         // ── Final Verification Summary ─────────────────────────────────────────────
         // Runs after ALL post-processing passes. Reports any remaining violations
@@ -942,13 +946,18 @@ ${text}`;
             generationConfig: { temperature: 0.1, maxOutputTokens: 24000 }
         }, 'V152 AI scrub pass');
         const scrubbed = result.response.text().replace(/```[a-z]*/gi, '').replace(/```/g, '').trim();
-        // Accept if output is ≥80% of original (prevents AI from over-trimming)
-        if (scrubbed && scrubbed.length >= text.length * 0.80) {
+        // Accept if output is 80%–102% of original (prevents over-trimming AND content addition)
+        const ratio = scrubbed.length / text.length;
+        if (scrubbed && ratio >= 0.80 && ratio <= 1.02) {
             const removedChars = text.length - scrubbed.length;
             console.log(`>>> [V152 AI Scrub] Done. Removed ~${removedChars} chars of internal-state content.`);
             return scrubbed;
         }
-        console.warn(`>>> [V152 AI Scrub] Output too short (${scrubbed.length}/${text.length}). Falling back to regex scrub.`);
+        if (ratio > 1.02) {
+            console.warn(`>>> [V152 AI Scrub] AI added content (${scrubbed.length} > ${text.length}). Falling back to regex scrub.`);
+        } else {
+            console.warn(`>>> [V152 AI Scrub] Output too short (${scrubbed.length}/${text.length}). Falling back to regex scrub.`);
+        }
     } catch (e) {
         console.warn(`>>> [V152 AI Scrub] Error — ${e}. Falling back to regex scrub.`);
     }
@@ -1418,16 +1427,37 @@ function getDialogueDensity(content: string): number {
  * line per scene in a single focused LLM call, then INSERT them programmatically.
  * The insertion format is controlled by our code, not the AI — guaranteeing correct format.
  */
-async function injectDialoguePass(script: string, charContext: string, model: any): Promise<string> {
+// V174: Forbidden patterns that V142 must never inject into a script
+const V142_FORBIDDEN_INJECT = [
+    '내가 옆에 있잖아', '넌 할 수 있어', '포기하지 마', '함께라면 해낼 수 있어',
+    '할 수 있어', '포기하지마', '포기 하지마', '힘내',
+];
+
+async function injectDialoguePass(script: string, charContext: string, model: any, canonicalNames?: string[]): Promise<string> {
     // Split into S# scene blocks
     const sceneBlocks = script.split(/(?=S#\s*\d+\.)/).filter(b => b.trim());
     if (!sceneBlocks.length) return script;
 
-    // For each scene, find the first Korean character name (2-4 chars followed by comma)
+    // For each scene, identify the dominant character using canonicalNames (preferred)
+    // or fall back to first action-subject pattern.
+    // V174 fix: do NOT use action verbs like "스며들자" as character names.
     const sceneInfos = sceneBlocks.map((block, idx) => {
-        // Note: \b doesn't work with Korean chars in JS (Korean is \W). Use lookahead/lookbehind instead.
-        const nameMatch = block.match(/(?:^|\s)([가-힣]{2,4}),\s/);
-        const charName = nameMatch && !EXCLUDED_WORDS.has(nameMatch[1]) ? nameMatch[1] : null;
+        let charName: string | null = null;
+        if (canonicalNames && canonicalNames.length > 0) {
+            // Prefer a canonical name that appears as a standalone dialogue header in this scene
+            const standaloneRe = new RegExp(`^(${canonicalNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`, 'm');
+            const m = block.match(standaloneRe);
+            charName = m ? m[1] : null;
+            // Fallback: canonical name that appears anywhere in the block (action subject)
+            if (!charName) {
+                charName = canonicalNames.find(n => block.includes(n)) ?? null;
+            }
+        } else {
+            // Legacy: match action-subject pattern — but ONLY accept names that are ≥3 chars
+            // to avoid single/dual-char verbs like "스며들자" being misidentified.
+            const nameMatch = block.match(/(?:^|\n)([가-힣]{3,4}),\s/);
+            charName = nameMatch && !EXCLUDED_WORDS.has(nameMatch[1]) ? nameMatch[1] : null;
+        }
         return { idx, block, charName };
     });
 
@@ -1472,6 +1502,11 @@ ${scenesWithChars.map((s, i) => `Scene ${i + 1} — ${s.charName} speaks:\n${s.b
         scenesWithChars.forEach((sceneInfo, i) => {
             const dialogueLine = (dialogueLines[i] || "").trim();
             if (!dialogueLine) return;
+            // V174: skip injection if generated line contains a forbidden cliché pattern
+            if (V142_FORBIDDEN_INJECT.some(p => dialogueLine.includes(p))) {
+                console.warn(`>>> [V142 Forbidden Skip] Line rejected for scene ${sceneInfo.idx + 1}: "${dialogueLine.substring(0, 40)}"`);
+                return;
+            }
 
             const lines = sceneInfo.block.split('\n');
             // Insert after the second non-empty line (after scene heading + first action)
