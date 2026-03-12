@@ -107,12 +107,26 @@ export class ScriptScribe {
             let dialogueRetry = false;
 
             while (retryCount < 3) {
+                // V169: Scene Skeleton — compute before prompt build
+                const skeletonTargetScenes = Math.max(3, Math.min(6,
+                    Math.ceil((sectionLengthTarget) / (Number(sceneAvgChars) || 300))
+                ));
+                const sceneSkeleton = buildSceneSkeleton({
+                    startScene: contextState.lastSceneNumber + 1,
+                    targetScenes: skeletonTargetScenes,
+                    targetChars: sectionLengthTarget,
+                    recentSlugs: contextState.recentSlugs ?? [],
+                    dreamSceneCount: contextState.dreamSceneCount ?? 0,
+                    lastTimeOfDay: contextState.lastTimeOfDay ?? '',
+                });
+
                 const prompt = buildUnifiedPrompt({
                     plot: chunk,
                     characters: charContext,
                     blueprint: activeBlueprint,
                     settings: worldSettings,
                     canonicalNames,
+                    sceneSkeleton,
                     // V140: Stabilized Continuity Bridge — only last scene to avoid "story already done" hallucination.
                     chronicle: i === 0 ? chronicle : (() => {
                         // Extract only the last scene from fullScript as anchor, not the entire history
@@ -913,6 +927,7 @@ This section MUST reach **${p.targetChars} characters** total. Write exactly ${t
 - Expand each scene with physical detail, reaction shots, and dialogue to fill the target length.
 - MINIMUM LENGTH ENFORCEMENT: If you finish all scenes and your total output is less than ${Math.floor((p.targetChars || 1500) * 0.85)} characters, go back and expand the shortest scenes — add more action lines, more dialogue turns, more environmental detail — until you reach the minimum. Do NOT stop early.
 - COVER ONLY the story beats listed in [STORY BEATS]. Do NOT advance to events not in those beats.
+${p.sceneSkeleton ? p.sceneSkeleton : ''}
 
 [MANDATORY RULES]
 1. **SCENE NUMBERING**: You MUST start the content with "S# ${nextNum}.". Use format "S# N. [PLACE] - [TIME]".
@@ -1111,7 +1126,21 @@ function updateContextState(content: string, state: any) {
  *   — handles cases where expansion passes strip standalone name headers but dialogue
  *     remains embedded inline (e.g. "어서 오세요.", "저는...요?", "...알겠습니다.")
  */
-const EXCLUDED_WORDS = new Set(['새벽', '아침', '밤', '낮', '저녁', '오전', '오후', '실내', '실외', '골목', '거리', '현재', '과거', '회상']);
+const EXCLUDED_WORDS = new Set([
+    // Time of day
+    '새벽', '아침', '밤', '낮', '저녁', '오전', '오후',
+    // Place tokens
+    '실내', '실외', '골목', '거리', '입구', '복도', '계단', '옥상', '창가', '문앞', '앞마당',
+    // Narrative markers
+    '현재', '과거', '회상', '계속', '동시',
+    // Relational nouns — CRITICAL: prevent V168 from picking these up as character names
+    '친구', '선생', '교수', '학생', '교장', '교감', '형사', '경찰', '의사', '간호',
+    '노인', '행인', '손님', '주인', '사장', '직원', '점원', '관리', '기자',
+    // Role/archetype nouns that appear in charContext descriptions
+    '악령', '악당', '괴물', '귀신', '영혼', '존재', '형체', '그림자',
+    // Common pronoun-like words that slip through
+    '그녀가', '그들이', '우리가', '그들을',
+]);
 
 // Speech-ending patterns that reliably indicate spoken Korean dialogue
 // Matches: 요./요?  세요  나요  인가요  하죠  합니까  겠습니다  etc.
@@ -1685,6 +1714,77 @@ function fixUnnumberedSlugs(script: string): string {
 }
 
 /**
+ * V169: Scene Skeleton Builder
+ * Builds a deterministic per-chunk scene structure guide injected into every chunk prompt.
+ * No API call — purely code-driven.
+ *
+ * Purpose: AI frequently generates too few scenes (38–63% of target volume) because the
+ * prompt only specifies total char count. Enumerating each expected scene with its
+ * minimum char budget forces the model to treat each slot as an independent writing task.
+ *
+ * Constraints encoded:
+ *   - Exact scene slot list (S# n through S# m)
+ *   - Per-scene minimum character budget
+ *   - Recently overused locations to avoid (from recentSlugs)
+ *   - Dream/nightmare scene ban flag (from dreamSceneCount)
+ *   - Time-of-day continuity hint (from lastTimeOfDay)
+ */
+function buildSceneSkeleton(params: {
+    startScene: number;
+    targetScenes: number;
+    targetChars: number;
+    recentSlugs: string[];
+    dreamSceneCount: number;
+    lastTimeOfDay: string;
+}): string {
+    const { startScene, targetScenes, targetChars, recentSlugs, dreamSceneCount, lastTimeOfDay } = params;
+    if (targetScenes <= 0) return '';
+
+    const minCharsPerScene = Math.floor(targetChars / targetScenes);
+    const hardMinPerScene = Math.max(200, Math.floor(minCharsPerScene * 0.8));
+
+    // Find overused base locations (appeared ≥ 2 times in last 8 slugs)
+    const baseCount = new Map<string, number>();
+    for (const slug of recentSlugs) {
+        // Extract base location: "INT. 서울 뒷골목 - 밤" → "서울 뒷골목"
+        const base = slug.replace(/^(INT|EXT|I|E)\.\s*/i, '').split('-')[0]?.trim() ?? '';
+        if (base) baseCount.set(base, (baseCount.get(base) ?? 0) + 1);
+    }
+    const overusedLocs = [...baseCount.entries()].filter(([_, c]) => c >= 2).map(([loc]) => loc);
+
+    // Time-of-day progression hint
+    const TIME_SEQUENCE = ['새벽', '아침', '낮', '저녁', '밤'];
+    const lastIdx = TIME_SEQUENCE.indexOf(lastTimeOfDay);
+    const timeHint = lastIdx >= 0
+        ? `첫 씬의 시간대는 "${lastTimeOfDay}"이거나 이후 시간대로 자연스럽게 이어지세요.`
+        : '';
+
+    // Build skeleton lines
+    const sceneLines: string[] = [];
+    for (let i = 0; i < targetScenes; i++) {
+        const n = startScene + i;
+        const isFirstFew = i < 2;
+        const locHint = isFirstFew && overusedLocs.length > 0
+            ? ` (최근 과다 사용 장소 제외: ${overusedLocs.slice(0, 2).join(', ')})`
+            : '';
+        sceneLines.push(`  S# ${n}. [장소 선택${locHint}] - [시간대] → 최소 ${hardMinPerScene}자 / 지문 4줄 + 대사 2회 이상`);
+    }
+
+    const dreamBanLine = dreamSceneCount >= 1
+        ? `\n⛔ 이 청크에서 악몽/꿈/수면/침대 씬은 절대 금지입니다 (이미 ${dreamSceneCount}회 사용됨).`
+        : '';
+
+    return `
+[SCENE SKELETON — 이 구조를 반드시 따르세요]
+아래 ${targetScenes}개 씬 슬롯을 빠짐없이 작성하세요. 슬롯 수를 줄이거나 합치지 마세요.
+${sceneLines.join('\n')}${dreamBanLine}
+${timeHint}
+각 슬롯의 최소 글자 수를 채우지 못하면 해당 씬으로 돌아가 지문과 대사를 추가하세요.
+[END SCENE SKELETON]
+`;
+}
+
+/**
  * V168: Canonical Character Name Extractor
  * Deterministically extracts character names from charContext before generation begins.
  * Only accepts names that appear ≥2 times in charContext (avoids incidental word matches).
@@ -1727,14 +1827,23 @@ function extractCanonicalNamesFromContext(charContext: string): string[] {
  */
 function scanForbiddenPatterns(script: string): void {
     const FORBIDDEN: Array<[string, RegExp]> = [
-        ['우리가 있잖아',         /우리가 있잖아/],
-        ['내가 옆에 있잖아',      /내가 옆에 있잖아/],
-        ['네가 있어서 정말 다행',  /네가 있어서 정말 다행/],
+        // Solidarity/consolation clichés
+        ['우리가 있잖아',            /우리가 있잖아/],
+        ['내가 옆에 있잖아',         /내가 옆에 있잖아/],
+        ['네가 있어서 정말 다행',     /네가 있어서 정말 다행/],
         ['너희들이 있어서 정말 다행', /너희들이 있어서 정말 다행/],
-        ['포기하지 마',           /포기하지 마[.!]?/],
-        ['넌 할 수 있어',         /넌 할 수 있어[.!]?/],
-        ['고마워.+다행이야',       /고마워.{0,20}다행이야/],
-        ['혼자가 아니야',         /혼자가 아니[야에]/],
+        ['혼자가 아니야',            /혼자가 아니[야에]/],
+        ['혼자 짊어지지 마',         /혼자\s*짊어지/],
+        ['우리가 함께할게',          /우리가\s*함께할/],
+        ['함께라면 무엇이든',        /함께라면\s*무엇이든/],
+        ['함께니까',                 /함께니까/],
+        // Encouragement clichés
+        ['포기하지 마',              /포기하지 마[.!]?/],
+        ['넌 할 수 있어',            /넌 할 수 있어[.!]?/],
+        ['할 수 있을 거야',          /할 수 있을 거[야야]?[.!]?/],
+        // Gratitude-relief combos
+        ['고마워.+다행이야',         /고마워.{0,20}다행이야/],
+        ['다행이야.+고마워',         /다행이야.{0,20}고마워/],
     ];
 
     const hits: string[] = [];
