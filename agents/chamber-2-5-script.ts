@@ -354,8 +354,15 @@ export class ScriptScribe {
                         const confirmedSlugNote = confirmedSlots.length > 0
                             ? `\n⛔ CONFIRMED SCENE LIST (from source novel — DO NOT add scenes beyond this list):\n${confirmedSlots.map(s => `  S# ${s.n}. ${s.intExt}. ${s.location} - ${s.timeOfDay}`).join('\n')}\nYou may ONLY expand content within the scenes listed above. Creating S# ${confirmedSlots[confirmedSlots.length - 1].n + 1} or any new scene number is FORBIDDEN.\n`
                             : '';
-                        const expandPrompt = `You are a professional Korean screenplay writer. The following screenplay is too short AND has too little dialogue. Expand it by adding MORE DIALOGUE EXCHANGES between characters. Target: approximately ${sectionLengthTarget} total characters.
+                        const expandPrompt = `You are a professional Korean screenplay writer. The following screenplay is too short AND has too little dialogue. Expand it by adding MORE DIALOGUE EXCHANGES between characters.
 ${confirmedSlugNote}
+⛔ LENGTH GATE — MANDATORY:
+  CURRENT length: ${content.length} characters
+  TARGET length:  ${sectionLengthTarget} characters
+  REQUIRED ADDITION: at least ${shortage} characters
+  If your output is less than ${Math.floor(sectionLengthTarget * 0.85)} characters total, it will be REJECTED as invalid.
+  Do NOT stop expanding until you have added the required amount.
+
 RULES:
 1. Add dialogue after every 2-3 action lines: character name alone on one line, spoken text on the next.
 2. Characters must speak — to each other, to themselves, or to the situation aloud.
@@ -365,7 +372,7 @@ RULES:
    × "복잡한 감정", "마치 ~같았다", any sentence about thoughts/emotions without a physical act
    If you encounter these in the existing text, REPLACE them with a physical action or dialogue line.
 4. Keep all existing scene sluglines (S# N. ...) intact. Write in Korean only.
-5. Add approximately ${shortage} more characters through dialogue — WITHIN existing scenes only.
+5. Add ${shortage} characters through dialogue exchanges — WITHIN existing scenes only. NOT monologue, NOT narration.
 6. LOCATION VARIETY CHECK: If 3 or more consecutive scenes share the exact same slugline, you MUST change at least one of them to a neighboring sub-location (append "계단", "안쪽", "입구", etc. to the place name) or shift the time label (새벽 → 이른 아침). Identical sluglines repeated 3+ times in a row is a formatting error.
 7. SOLO SCENE CHECK: If a character is alone for 3 or more consecutive scenes, add another character appearing briefly (knock on door, phone call, passer-by) to break the solo streak.
 
@@ -391,6 +398,12 @@ Output the full expanded screenplay in Korean S# format.`;
                                 : '';
                             const expandPrompt2 = `You are a professional Korean screenplay writer. The following screenplay needs MORE content to reach the target length of ${sectionLengthTarget} characters. It is currently only ${content.length} characters.
 ${confirmedSlugNote2}
+⛔ LENGTH GATE — MANDATORY:
+  CURRENT length: ${content.length} characters
+  TARGET length:  ${sectionLengthTarget} characters
+  REQUIRED ADDITION: at least ${shortage2} characters
+  If your output is less than ${Math.floor(sectionLengthTarget * 0.85)} characters total, it will be REJECTED as invalid.
+
 TASK: Add ${shortage2} more characters by expanding EXISTING scenes — NOT adding new plot events.
 - Extend dialogue exchanges: add 2-3 more turns per existing conversation
 - Add reaction shots and physical detail to action lines
@@ -1286,6 +1299,10 @@ const EXCLUDED_WORDS = new Set([
     '악령', '악당', '괴물', '귀신', '영혼', '존재', '형체', '그림자',
     // Common pronoun-like words that slip through
     '그녀가', '그들이', '우리가', '그들을',
+    // V173 fix: abstract nouns from charContext descriptions mistaken for character names (V168 Pattern E)
+    '잠재력', '역할', '수행', '교육', '방식', '성격', '비밀', '관계', '능력',
+    '미래', '세대', '흥미', '과거', '멘토', '조언', '조력', '릴리프', '결정',
+    '현대', '전통', '융합', '수업', '스파이', '이중', '마법', '무술', '개성',
 ]);
 
 // Speech-ending patterns that reliably indicate spoken Korean dialogue
@@ -1340,6 +1357,7 @@ function getDialogueDensity(content: string): number {
     const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
     let dialogueLines = 0;
     let totalLines = 0;
+    const speakers = new Set<string>(); // V173: track unique speakers for monologue detection
 
     // Strategy 1: standard format
     for (let i = 0; i < lines.length; i++) {
@@ -1349,6 +1367,7 @@ function getDialogueDensity(content: string): number {
         const isKoreanName = /^[가-힣]{2,6}$/.test(line) && !EXCLUDED_WORDS.has(line) && !line.includes('.');
         const isEnglishName = /^[A-Z][A-Z\s]{1,24}$/.test(line);
         if ((isKoreanName || isEnglishName) && i + 1 < lines.length && !lines[i + 1].startsWith('S#') && lines[i + 1].length > 4) {
+            speakers.add(line); // track who speaks
             dialogueLines++; // name line
             i++;             // advance to spoken line
             totalLines++;    // spoken line also counts toward total
@@ -1358,7 +1377,15 @@ function getDialogueDensity(content: string): number {
 
     // If standard format detected dialogue, return that ratio
     if (dialogueLines > 0) {
-        return Math.min(1.0, dialogueLines / Math.max(1, totalLines));
+        const rawDensity = Math.min(1.0, dialogueLines / Math.max(1, totalLines));
+        // V173: monologue penalty — single speaker = internal monologue, not exchange dialogue
+        // Apply 50% penalty so V141 fallback (threshold 15%) triggers correctly
+        if (speakers.size <= 1) {
+            const soloName = [...speakers][0] ?? '?';
+            console.warn(`>>> [V173 Monologue] Single speaker "${soloName}" — applying 50% monologue penalty (${(rawDensity * 100).toFixed(1)}% → ${(rawDensity * 50).toFixed(1)}%).`);
+            return rawDensity * 0.5;
+        }
+        return rawDensity;
     }
 
     // Strategy 2: prose-embedded format — count speech-pattern sentences
@@ -2144,16 +2171,20 @@ function fixTimeRegression(script: string): string {
         '낮': '저녁', '저녁': '밤', '밤': '새벽', '새벽': '이른 아침', '아침': '낮'
     };
     const SKIP_MARKERS = ['다음 날', '몇 시간 후', '다음날', '며칠 후', '이튿날', '그 다음 날'];
-    const SLUG_RE = /^(S#\s*\d+[A-Za-z가-힣]?\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*)(\S+)(.*)/m;
+    // V173 fix: capture multi-word Korean time labels like "이른 아침", "늦은 밤", "한밤중"
+    // [가-힣]+(?:\s+[가-힣]+)? = one or two Korean words; post captures trailing notes like "(꿈)"
+    const SLUG_RE = /^(S#\s*\d+[A-Za-z가-힣]?\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*)([가-힣]+(?:\s+[가-힣]+)?)(.*)/m;
 
     // Collect all slugline positions and their matched times
     const entries: Array<{ time: string; matchIdx: number; fullMatch: string; pre: string; post: string }> = [];
-    const globalRe = /^(S#\s*\d+[A-Za-z가-힣]?\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*)(\S+)(.*)/gm;
+    const globalRe = /^(S#\s*\d+[A-Za-z가-힣]?\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*)([가-힣]+(?:\s+[가-힣]+)?)(.*)/gm;
     for (const m of script.matchAll(globalRe)) {
         const timeToken = m[2]?.trim() ?? '';
-        const matched = TIME_ORDER.find(t => timeToken.includes(t));
-        if (matched) {
-            entries.push({ time: matched, matchIdx: m.index ?? 0, fullMatch: m[0], pre: m[1], post: m[3] ?? '' });
+        // V173: store the BASE time key (for ordering) and the FULL token (for replacement)
+        // e.g. "이른 아침" → base='아침', fullToken='이른 아침'
+        const baseTime = TIME_ORDER.find(t => timeToken.includes(t));
+        if (baseTime) {
+            entries.push({ time: baseTime, matchIdx: m.index ?? 0, fullMatch: m[0], pre: m[1], post: m[3] ?? '' });
         }
     }
 
