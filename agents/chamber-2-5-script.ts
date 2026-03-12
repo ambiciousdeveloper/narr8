@@ -253,6 +253,11 @@ TASK: Add ${shortage2} more characters by expanding EXISTING scenes — NOT addi
 - Add environmental/sensory detail (sounds, textures, lighting) to scene descriptions
 - Keep all existing S# sluglines and scene structure intact
 
+DIALOGUE FORMAT (mandatory — do not deviate):
+캐릭터명
+대사 내용
+(Character name alone on one line → spoken text on the next line. No inline embedding.)
+
 RULES:
 1. Do NOT add new scenes or new characters
 2. Do NOT add internal-state descriptions (마음속에, 생각에 잠겼다, etc.)
@@ -462,11 +467,22 @@ ${content}`;
             fullScript = await injectDialoguePass(fullScript, charContext, model);
         }
 
+        // V164: Character name normalization — fix surname drift across chunks
+        // e.g. "김해리" in first half → "도해리" in second half (AI changed surname)
+        fullScript = normalizeCharacterNames(fullScript, charContext);
+
+        // V165: Anonymous protagonist fix — replace scenes where ONLY "그" is used
+        // (no character name at all) with the dominant protagonist name from earlier scenes.
+        fullScript = fixAnonymousProtagonist(fullScript);
+
         // V146: Renumber scenes sequentially to fix duplicates from Rule 6 splits
         fullScript = renumberScenes(fullScript);
 
         // V157: Remove duplicate transition lines between consecutive scenes
         fullScript = removeDuplicateSceneTransitions(fullScript);
+
+        // V166: Intra-script time regression check — warn on backward time jumps within a single chunk
+        detectTimeRegression(fullScript);
 
         // V160: Fix unnumbered bare slug lines embedded in scene bodies
         fullScript = fixUnnumberedSlugs(fullScript);
@@ -1104,21 +1120,51 @@ function updateContextState(content: string, state: any) {
  * V141: Dialogue Presence Validator
  * Detects at least one character name line followed by a dialogue line.
  * False-positive guard: excludes common time/place words (새벽, 아침, 밤, etc.)
+ *
+ * Strategy 1 (standard format): standalone name line → next line is dialogue
+ * Strategy 2 (prose-embedded format): speech-pattern sentences within continuous prose
+ *   — handles cases where expansion passes strip standalone name headers but dialogue
+ *     remains embedded inline (e.g. "어서 오세요.", "저는...요?", "...알겠습니다.")
  */
 const EXCLUDED_WORDS = new Set(['새벽', '아침', '밤', '낮', '저녁', '오전', '오후', '실내', '실외', '골목', '거리', '현재', '과거', '회상']);
 
+// Speech-ending patterns that reliably indicate spoken Korean dialogue
+// Matches: 요./요?  세요  나요  인가요  하죠  합니까  겠습니다  etc.
+const SPEECH_PATTERN_RE = /(?:요|세요|나요|인가요|하죠|죠|합니까|겠습니다|십시오|해봐요|봐요)[.?!]?\s*$/;
+// Conversational starters / reactions common in dialogue
+const SPEECH_STARTER_RE = /^(?:아|어|오|이|네|예|응|그래|맞아|좋아|알았어|알겠|잠깐|잠시만|저|나|우리|당신|너|뭐|왜|어떻게|언제|어디|누구)/;
+
 function hasDialogue(content: string): boolean {
     const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+
+    // Strategy 1: standard screenplay format — standalone name line → dialogue line
     for (let i = 0; i < lines.length - 1; i++) {
         const line = lines[i];
-        // Korean name: 2-6 chars, not a time/place word, not starting with S# or punctuation
         const isKoreanName = /^[가-힣]{2,6}$/.test(line) && !EXCLUDED_WORDS.has(line) && !line.includes('.');
-        // English character name: all caps, 2-25 chars
         const isEnglishName = /^[A-Z][A-Z\s]{1,24}$/.test(line);
         if ((isKoreanName || isEnglishName) && !lines[i + 1].startsWith('S#') && lines[i + 1].length > 4) {
             return true;
         }
     }
+
+    // Strategy 2: prose-embedded format — detect speech patterns within body text.
+    // Strip slug prefix from each line before checking.
+    const SLUG_PREFIX_RE = /^S#\s*\d+[A-Za-z가-힣]?\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*\S+\s*/i;
+    for (const rawLine of lines) {
+        const body = rawLine.replace(SLUG_PREFIX_RE, '').trim();
+        if (!body) continue;
+        // Split body into individual sentences
+        const sentences = body.split(/(?<=[.!?…])\s+/);
+        for (const sent of sentences) {
+            const s = sent.trim();
+            if (s.length < 4 || s.length > 120) continue;
+            if (SPEECH_PATTERN_RE.test(s)) return true;
+            if (SPEECH_STARTER_RE.test(s) && s.length < 60) return true;
+            // Ellipsis mid-sentence (very common in Korean dialogue hesitation)
+            if (s.includes('...') && s.length < 50) return true;
+        }
+    }
+
     return false;
 }
 
@@ -1126,11 +1172,16 @@ function hasDialogue(content: string): boolean {
  * Measures the ratio of dialogue lines to total non-empty, non-slugline lines.
  * A "dialogue line" is the spoken text immediately following a character name line.
  * Returns a value between 0.0 and 1.0.
+ *
+ * Strategy 1: standard format (standalone name header)
+ * Strategy 2: prose-embedded format — counts sentences with speech endings as dialogue
  */
 function getDialogueDensity(content: string): number {
     const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
     let dialogueLines = 0;
     let totalLines = 0;
+
+    // Strategy 1: standard format
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (line.startsWith('S#')) continue; // skip sluglines
@@ -1144,8 +1195,31 @@ function getDialogueDensity(content: string): number {
             dialogueLines++; // spoken line
         }
     }
-    if (totalLines === 0) return 0;
-    return Math.min(1.0, dialogueLines / totalLines); // cap at 1.0
+
+    // If standard format detected dialogue, return that ratio
+    if (dialogueLines > 0) {
+        return Math.min(1.0, dialogueLines / Math.max(1, totalLines));
+    }
+
+    // Strategy 2: prose-embedded format — count speech-pattern sentences
+    const SLUG_PREFIX_RE = /^S#\s*\d+[A-Za-z가-힣]?\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*\S+\s*/i;
+    let totalSentences = 0;
+    let speechSentences = 0;
+    for (const rawLine of lines) {
+        const body = rawLine.replace(SLUG_PREFIX_RE, '').trim();
+        if (!body) continue;
+        const sentences = body.split(/(?<=[.!?…])\s+/);
+        for (const sent of sentences) {
+            const s = sent.trim();
+            if (s.length < 4) continue;
+            totalSentences++;
+            if (SPEECH_PATTERN_RE.test(s) || (SPEECH_STARTER_RE.test(s) && s.length < 60) || (s.includes('...') && s.length < 50)) {
+                speechSentences++;
+            }
+        }
+    }
+    if (totalSentences === 0) return 0;
+    return Math.min(1.0, speechSentences / totalSentences);
 }
 
 /**
@@ -1164,7 +1238,8 @@ async function injectDialoguePass(script: string, charContext: string, model: an
 
     // For each scene, find the first Korean character name (2-4 chars followed by comma)
     const sceneInfos = sceneBlocks.map((block, idx) => {
-        const nameMatch = block.match(/\b([가-힣]{2,4}),[\s]/);
+        // Note: \b doesn't work with Korean chars in JS (Korean is \W). Use lookahead/lookbehind instead.
+        const nameMatch = block.match(/(?:^|\s)([가-힣]{2,4}),\s/);
         const charName = nameMatch && !EXCLUDED_WORDS.has(nameMatch[1]) ? nameMatch[1] : null;
         return { idx, block, charName };
     });
@@ -1622,6 +1697,166 @@ function fixUnnumberedSlugs(script: string): string {
         fixed = renumberScenes(fixed);
     }
     return fixed;
+}
+
+/**
+ * V166: Intra-Script Time Regression Detector
+ * Scans all sluglines in sequence and logs any case where time-of-day moves BACKWARD
+ * without an explicit time-skip marker ("다음 날", "몇 시간 후", etc.) in the preceding scene body.
+ *
+ * Does NOT modify the script — reports only. Fixes must be done in the generation prompt.
+ * Time order: 낮 → 저녁 → 밤 → 새벽 → 아침 → 낮 (next day)
+ */
+function detectTimeRegression(script: string): void {
+    const TIME_ORDER = ['낮', '저녁', '밤', '새벽', '아침'];
+    const SKIP_MARKERS = ['다음 날', '몇 시간 후', '다음날', '며칠 후', '이튿날', '그 다음 날'];
+    const slugRe = /^S#\s*\d+[A-Za-z가-힣]?\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*(.+)$/gm;
+
+    const entries: Array<{ sceneNum: string; time: string; pos: number }> = [];
+    for (const m of script.matchAll(/^(S#\s*\d+[A-Za-z가-힣]?)\.\s*(?:INT|EXT|I|E)\.[^-]+-\s*(\S+)/gm)) {
+        const time = m[2]?.trim() ?? '';
+        const matchedTime = TIME_ORDER.find(t => time.includes(t));
+        if (matchedTime) entries.push({ sceneNum: m[1], time: matchedTime, pos: m.index ?? 0 });
+    }
+
+    let regressions = 0;
+    for (let i = 1; i < entries.length; i++) {
+        const prev = entries[i - 1];
+        const curr = entries[i];
+        const prevIdx = TIME_ORDER.indexOf(prev.time);
+        const currIdx = TIME_ORDER.indexOf(curr.time);
+        // Regression: current time-of-day is "earlier" in the day cycle than previous
+        // Allow wrap-around (새벽→아침→낮 = forward), only flag true backward jumps
+        const isRegression = currIdx < prevIdx && !(prevIdx >= 3 && currIdx <= 1); // allow 새벽/아침 → 낮 (next day)
+        if (isRegression) {
+            // Check if there's a skip marker in the scene body between prev and curr
+            const between = script.substring(prev.pos, curr.pos);
+            const hasSkip = SKIP_MARKERS.some(marker => between.includes(marker));
+            if (!hasSkip) {
+                console.warn(`>>> [V166 Time Regression] ${curr.sceneNum}: ${prev.time} → ${curr.time} (backward, no skip marker)`);
+                regressions++;
+            }
+        }
+    }
+    if (regressions === 0) {
+        console.log(`>>> [V166 Time Regression] OK — no time regressions detected.`);
+    }
+}
+
+/**
+ * V165: Anonymous Protagonist Fix
+ * Detects scene blocks that use only generic "그" as the subject with NO 3-char Korean name
+ * in the action lines. Replaces the first occurrence of "그," (action subject) with the
+ * dominant protagonist name derived from the rest of the script.
+ *
+ * Scope: only action lines (not dialogue lines) and only when the scene has ZERO named actors.
+ */
+function fixAnonymousProtagonist(script: string): string {
+    // Find the dominant protagonist: most-used 3-char Korean name with action suffix
+    const nameRe = /([가-힣]{3}),/g;
+    const counts = new Map<string, number>();
+    for (const m of script.matchAll(nameRe)) {
+        const n = m[1];
+        if (EXCLUDED_WORDS.has(n)) continue;
+        counts.set(n, (counts.get(n) ?? 0) + 1);
+    }
+    if (counts.size === 0) return script;
+    const protagonist = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+
+    // Split into scene blocks and check each
+    const sceneBlocks = script.split(/(?=^S#\s*\d+)/m);
+    let fixedCount = 0;
+    const result = sceneBlocks.map(block => {
+        // If the block already has a named character (3-char name + comma), leave it
+        if (nameRe.test(block)) {
+            nameRe.lastIndex = 0; // reset stateful regex
+            return block;
+        }
+        nameRe.lastIndex = 0;
+        // If block uses "그," as subject at least once, replace first occurrence
+        if (/(?:^|\n)그,/.test(block)) {
+            const fixed = block.replace(/(?<=(?:^|\n))그,/, `${protagonist},`);
+            if (fixed !== block) fixedCount++;
+            return fixed;
+        }
+        return block;
+    }).join('');
+
+    if (fixedCount > 0) {
+        console.warn(`>>> [V165 Anon Fix] Replaced anonymous "그," with "${protagonist}" in ${fixedCount} scene(s).`);
+    } else {
+        console.log(`>>> [V165 Anon Fix] No anonymous protagonist scenes detected.`);
+    }
+    return result;
+}
+
+/**
+ * V164: Character Name Normalization
+ * Detects surname drift across chunks (e.g. "김해리" → "도해리") and corrects it.
+ *
+ * Algorithm:
+ * 1. Extract all 3-char Korean names used in the script (surname 1 char + given name 2 chars).
+ * 2. Group names by their 2-char given name (chars 1-2 of the 3-char name).
+ * 3. If two names share the same given name but differ in surname, the one appearing MORE
+ *    often is treated as canonical. The minority variant is replaced.
+ * 4. Log each substitution so the caller can see what was fixed.
+ *
+ * Also extracts known names from charContext to bias the canonical selection.
+ */
+function normalizeCharacterNames(script: string, charContext: string): string {
+    // Extract all 3-char Korean names that appear with action suffix (name + comma OR name + 은/는/이/가)
+    const nameRe = /([가-힣]{3})(?=[,은는이가\s])/g;
+    const counts = new Map<string, number>();
+    for (const m of script.matchAll(nameRe)) {
+        const n = m[1];
+        if (EXCLUDED_WORDS.has(n)) continue;
+        counts.set(n, (counts.get(n) ?? 0) + 1);
+    }
+
+    // Also collect known names from charContext to boost their canonical weight
+    for (const m of charContext.matchAll(nameRe)) {
+        const n = m[1];
+        if (EXCLUDED_WORDS.has(n)) continue;
+        counts.set(n, (counts.get(n) ?? 0) + 5); // bias toward known names
+    }
+
+    if (counts.size < 2) return script; // nothing to compare
+
+    // Group by given name (last 2 chars of 3-char name)
+    const byGivenName = new Map<string, string[]>();
+    for (const name of counts.keys()) {
+        if (name.length !== 3) continue;
+        const given = name.slice(1); // e.g. "해리" from "김해리"
+        const arr = byGivenName.get(given) ?? [];
+        arr.push(name);
+        byGivenName.set(given, arr);
+    }
+
+    let result = script;
+    let fixed = 0;
+    for (const [given, variants] of byGivenName) {
+        if (variants.length < 2) continue;
+        // Sort descending by count — highest count = canonical
+        variants.sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0));
+        const canonical = variants[0];
+        const minorities = variants.slice(1);
+        for (const wrong of minorities) {
+            if ((counts.get(wrong) ?? 0) === 0) continue;
+            // Replace all occurrences of the wrong name with the canonical one
+            const re = new RegExp(wrong, 'g');
+            const before = result;
+            result = result.replace(re, canonical);
+            const n = (before.match(re) || []).length;
+            if (n > 0) {
+                console.warn(`>>> [V164 Name Norm] Replaced "${wrong}" → "${canonical}" (${n} occurrence(s), given name: "${given}")`);
+                fixed += n;
+            }
+        }
+    }
+    if (fixed === 0) {
+        console.log(`>>> [V164 Name Norm] No surname drift detected.`);
+    }
+    return result;
 }
 
 /**
