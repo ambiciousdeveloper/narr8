@@ -182,6 +182,14 @@ export class ScriptScribe {
         const canonicalNames = extractCanonicalNamesFromContext(charContext);
         console.log(`>>> [V168 Name Roster] Canonical names extracted: [${canonicalNames.join(', ')}]`);
 
+        // V176: Pre-seed protagonist pronoun from charContext gender markers.
+        // This ensures chunk 1 already receives the correct pronoun lock instruction,
+        // preventing V158 from locking in a wrong pronoun from AI-generated content alone.
+        const preInitPronoun = extractProtagonistGenderFromContext(charContext, canonicalNames);
+        if (preInitPronoun) {
+            console.log(`>>> [V176 Gender Pre-init] Protagonist pronoun pre-set to "${preInitPronoun}" from charContext.`);
+        }
+
         // 3. Unified Generation Loop
         let fullScript = "";
         let finalCharacters: any[] = [];
@@ -194,7 +202,7 @@ export class ScriptScribe {
             lastSceneNumber: 0,
             recentSlugs: [] as string[],
             dreamSceneCount: 0,  // V148: 전체 대본에서 악몽/수면 씬 누적 카운트 (최대 2회 허용)
-            protagonistPronouns: '' as string,  // V158: 첫 청크 생성 후 감지된 주인공 대명사 (그/그녀), 이후 청크에 명시 주입
+            protagonistPronouns: preInitPronoun,  // V176: pre-seeded from charContext gender; falls back to V158 AI detection
             lastTimeOfDay: '' as string,   // V161: 마지막 씬의 시간대 (밤/새벽/아침/낮/저녁) — 청크 간 시간 역행 방지
             lastLocation: '' as string     // V161: 마지막 씬의 장소 — 청크 간 갑작스러운 장소 변경 시 전환 씬 요구
         };
@@ -597,6 +605,10 @@ ${chunk}
         // e.g. "김해리" in first half → "도해리" in second half (AI changed surname)
         fullScript = normalizeCharacterNames(fullScript, charContext);
 
+        // V176: Cross-chunk gender pronoun normalizer — fixes action-line pronoun inconsistencies
+        // in single-speaker scenes where the charContext gender is known.
+        fullScript = fixGenderPronouns(fullScript, charContext, canonicalNames);
+
         // V165: Anonymous protagonist fix — replace scenes where ONLY "그" is used
         // (no character name at all) with the dominant protagonist name from earlier scenes.
         fullScript = fixAnonymousProtagonist(fullScript);
@@ -718,6 +730,8 @@ ${chunk}
             } else {
                 console.log(`>>> [Final Verify] ✓ All slug/location rules satisfied. Total scenes: ${finalScenes}.`);
             }
+            // V177: Post-generation check for characters invented beyond the approved roster
+            detectUnregisteredCharacters(fullScript, canonicalNames);
         }
 
         return {
@@ -2161,13 +2175,24 @@ function extractCanonicalNamesFromContext(charContext: string): string[] {
  * Each entry: [label, findRegex, replacement]
  */
 function fixForbiddenPatterns(script: string): string {
-    const FORBIDDEN: Array<[string, RegExp, string]> = [
+    // Replacement can be a plain string or a context-aware function.
+    // Function signature: (match, offset, fullStr) => replacementString
+    type Replacer = string | ((match: string, offset: number, str: string) => string);
+    const FORBIDDEN: Array<[string, RegExp, Replacer]> = [
         // Solidarity/consolation clichés → direct/action-oriented alternatives
         ['우리가 있잖아',            /우리가 있잖아/g,                      '여기 있어.'],
         ['내가 옆에 있잖아',         /내가 옆에 있잖아/g,                   '여기 있어.'],
         ['네가 있어서 정말 다행',     /네가 있어서 정말 다행이야/g,          '같이 해결하면 돼.'],
         ['너희들이 있어서 정말 다행', /너희들이 있어서 정말 다행이야/g,      '같이 움직이자.'],
-        ['혼자가 아니야',            /혼자가 아니[야에][.!]?/g,             '같이 해결하자.'],
+        // V167 context-aware: if a solidarity phrase immediately precedes (있잖아/함께/같이/여기 있),
+        // the simple "같이 해결하자." replacement would create a redundant pair.
+        // In that case use a more contrasting reply; otherwise use the default replacement.
+        ['혼자가 아니야', /혼자가 아니[야에][.!]?/g, (match: string, offset: number, str: string) => {
+            const preceding = str.substring(Math.max(0, offset - 70), offset);
+            return /있잖아|함께|같이|여기 있|우리/.test(preceding)
+                ? '그래도 뭐가 달라져.'
+                : '같이 해결하자.';
+        }],
         ['혼자 짊어지지 마',         /혼자\s*짊어지지?\s*마[.!]?/g,         '움직이자. 같이.'],
         ['우리가 함께할게',          /우리가\s*함께할게[.!]?/g,             '따라와.'],
         ['함께라면 무엇이든',        /함께라면\s*무엇이든[^.!?]*/g,         '같이 움직이자.'],
@@ -2185,7 +2210,9 @@ function fixForbiddenPatterns(script: string): string {
     const hits: string[] = [];
     for (const [label, re, replacement] of FORBIDDEN) {
         if (re.test(result)) {
-            result = result.replace(re, replacement);
+            result = typeof replacement === 'function'
+                ? result.replace(re, replacement as (match: string, ...args: any[]) => string)
+                : result.replace(re, replacement);
             hits.push(label);
         }
     }
@@ -2347,6 +2374,124 @@ function buildEnglishNameAliasMap(charContext: string): Map<string, string> {
         if (koAlias !== korName) aliasMap.set(koAlias, korName);
     }
     return aliasMap;
+}
+
+/**
+ * V177: Unregistered Character Detector
+ * Scans the assembled script for standalone Korean name lines (dialogue headers).
+ * Warns if any name is NOT in the canonicalNames roster extracted from charContext.
+ * These represent characters the AI invented beyond the approved roster.
+ */
+function detectUnregisteredCharacters(script: string, canonicalNames: string[]): void {
+    const canonicalSet = new Set(canonicalNames);
+    const unregistered = new Set<string>();
+
+    for (const line of script.split('\n')) {
+        const t = line.trim();
+        if (!t || /^S#\s*\d+/.test(t)) continue;
+        // Standalone Korean name line (2-6 chars) = dialogue header format
+        if (/^[가-힣]{2,6}$/.test(t) && !EXCLUDED_WORDS.has(t) && !canonicalSet.has(t)) {
+            unregistered.add(t);
+        }
+    }
+
+    if (unregistered.size > 0) {
+        console.warn(`>>> [V177 Unregistered Characters] ${unregistered.size} character(s) used as dialogue headers are NOT in charContext NAME ROSTER: [${[...unregistered].join(', ')}]`);
+    } else {
+        console.log(`>>> [V177 Unregistered Characters] OK — all dialogue speakers are in charContext NAME ROSTER.`);
+    }
+}
+
+/**
+ * V176: Protagonist gender extractor from charContext.
+ * Searches charContext near each canonical name for 여성/여자/그녀 (female)
+ * or 남성/남자 (male) markers. Returns '그녀', '그', or '' if undetermined.
+ */
+function extractProtagonistGenderFromContext(charContext: string, canonicalNames: string[]): string {
+    for (const name of canonicalNames.slice(0, 3)) {
+        const idx = charContext.indexOf(name);
+        if (idx < 0) continue;
+        const window = charContext.substring(idx, Math.min(charContext.length, idx + 400));
+        if (/여성|여자|그녀/.test(window)) return '그녀';
+        if (/남성|남자/.test(window)) return '그';
+    }
+    return '';
+}
+
+/**
+ * V176: Cross-chunk gender pronoun normalizer.
+ * In single-speaker scenes (only one canonical character has dialogue), normalizes
+ * action-line pronouns to match the charContext-defined gender for that character.
+ * Skips multi-speaker scenes to avoid cross-character false positives.
+ */
+function fixGenderPronouns(script: string, charContext: string, canonicalNames: string[]): string {
+    if (!canonicalNames.length) return script;
+
+    // Build gender map from charContext
+    const genderMap = new Map<string, '그' | '그녀'>();
+    for (const name of canonicalNames) {
+        const idx = charContext.indexOf(name);
+        if (idx < 0) continue;
+        const ctx = charContext.substring(idx, Math.min(charContext.length, idx + 400));
+        if (/여성|여자|그녀/.test(ctx)) genderMap.set(name, '그녀');
+        else if (/남성|남자/.test(ctx)) genderMap.set(name, '그');
+    }
+    if (genderMap.size === 0) {
+        console.log('>>> [V176 Gender Fix] No gender markers found in charContext — skipping.');
+        return script;
+    }
+
+    const canonicalSet = new Set(canonicalNames);
+    const blocks = script.split(/(?=^S#\s*\d+)/m);
+    let totalFixes = 0;
+
+    const processed = blocks.map(block => {
+        const lines = block.split('\n');
+
+        // Identify canonical speakers (dialogue headers) in this scene block
+        const speakers = new Set<string>();
+        for (const line of lines) {
+            const t = line.trim();
+            if (/^[가-힣]{2,6}$/.test(t) && canonicalSet.has(t)) speakers.add(t);
+        }
+
+        // Only fix single-speaker scenes to avoid cross-character pronoun false positives
+        if (speakers.size !== 1) return block;
+        const [speaker] = [...speakers];
+        const canonGender = genderMap.get(speaker);
+        if (!canonGender) return block;
+
+        // Fix action lines only — skip character name header line and the dialogue line after it
+        let skipNext = false;
+        return lines.map(line => {
+            const t = line.trim();
+            if (!t || /^S#\s*\d+/.test(t)) { skipNext = false; return line; }
+            if (/^[가-힣]{2,6}$/.test(t) && canonicalSet.has(t)) { skipNext = true; return line; }
+            if (skipNext) { skipNext = false; return line; } // dialogue line — skip
+
+            // Action line: apply gender normalization
+            if (canonGender === '그녀') {
+                // Replace 그의/그는/그를/그가/그에게 etc. (but NOT 그녀…) → 그녀의/그녀는/…
+                return line.replace(/그(?!녀)(의|는|를|가|에게|와|도|만|조차|마저)/g, (_, p) => {
+                    totalFixes++;
+                    return `그녀${p}`;
+                });
+            } else {
+                // Replace 그녀의/그녀는/그녀를/그녀가 etc. → 그의/그는/그를/그가
+                return line.replace(/그녀(의|는|를|가|에게|와|도|만|조차|마저)/g, (_, p) => {
+                    totalFixes++;
+                    return `그${p}`;
+                });
+            }
+        }).join('\n');
+    });
+
+    if (totalFixes > 0) {
+        console.warn(`>>> [V176 Gender Fix] Normalized ${totalFixes} pronoun(s) in single-speaker scene action lines.`);
+    } else {
+        console.log('>>> [V176 Gender Fix] OK — no cross-chunk pronoun mismatches in single-speaker scenes.');
+    }
+    return processed.join('');
 }
 
 /**
