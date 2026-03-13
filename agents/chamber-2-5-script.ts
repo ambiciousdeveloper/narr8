@@ -2492,17 +2492,18 @@ function detectUnregisteredCharacters(script: string, canonicalNames: string[]):
         }
 
         // B) Descriptive standalone header detection — role-suffix whitelist approach (V177 B re-enabled).
-        // Only matches lines that END with a known anonymous-role suffix, so action-line fragments are
-        // never accidentally matched.  No syllables other than [가-힣] are allowed (공백 불허).
+        // Matches single-word OR two-word compound headers (e.g. "편의점 직원", "검은 그림자").
+        // Suffix whitelist ensures short action-line fragments are never accidentally matched.
         const DESCRIPTIVE_ROLE_SUFFIXES = [
             '직원', '남자', '여자', '노인', '노숙자', '취객', '행인', '사람',
             '선배', '후배', '형사', '경찰', '경비', '의사', '간호사', '점원',
             '관객', '구경꾼', '목격자', '승객', '운전사',
+            '그림자', '존재', '인물', '병사', '군인', '악당',
         ];
         const isDescriptiveHeader =
             !canonicalSet.has(t) &&
             !EXCLUDED_WORDS.has(t) &&
-            /^[가-힣]{2,8}$/.test(t) &&          // pure Korean, no spaces, 2-8 chars
+            /^[가-힣]{2,8}(\s[가-힣]{1,5})?$/.test(t) &&   // 1~2 Korean words, no extra spaces
             !/^S#/.test(t) &&
             DESCRIPTIVE_ROLE_SUFFIXES.some(suffix => t.endsWith(suffix));
         if (isDescriptiveHeader) {
