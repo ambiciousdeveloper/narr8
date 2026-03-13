@@ -2480,7 +2480,9 @@ function detectUnregisteredCharacters(script: string, canonicalNames: string[]):
 
         // A) Standalone pure Korean name (2-6 chars) not in roster → remove header + spoken line
         if (/^[가-힣]{2,6}$/.test(t) && !EXCLUDED_WORDS.has(t) && !canonicalSet.has(t)) {
-            const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : '';
+            // Skip at most one blank line between header and dialogue
+            const peekIdx = (i + 1 < lines.length && lines[i + 1].trim() === '') ? i + 2 : i + 1;
+            const nextLine = peekIdx < lines.length ? lines[peekIdx].trim() : '';
             // Safety: only skip next line if it looks like actual spoken dialogue
             // (non-empty, not a slug, not another standalone name, not an action line ending in period)
             const nextIsSafeToSkip = nextLine.length > 0 &&
@@ -2489,7 +2491,7 @@ function detectUnregisteredCharacters(script: string, canonicalNames: string[]):
                 nextLine.length <= 80;
             console.warn(`>>> [V177 Remove] Unregistered dialogue header removed: "${t}"`);
             removed.headers++;
-            if (nextIsSafeToSkip) i++; // skip the spoken line that follows
+            if (nextIsSafeToSkip) i = peekIdx; // skip blank line (if any) + spoken line
             continue;
         }
 
@@ -2501,6 +2503,7 @@ function detectUnregisteredCharacters(script: string, canonicalNames: string[]):
             '선배', '후배', '형사', '경찰', '경비', '의사', '간호사', '점원',
             '관객', '구경꾼', '목격자', '승객', '운전사',
             '그림자', '존재', '인물', '병사', '군인', '악당',
+            '목소리', '나레이터',
         ];
         const isDescriptiveHeader =
             !canonicalSet.has(t) &&
@@ -2509,7 +2512,9 @@ function detectUnregisteredCharacters(script: string, canonicalNames: string[]):
             !/^S#/.test(t) &&
             DESCRIPTIVE_ROLE_SUFFIXES.some(suffix => t.endsWith(suffix));
         if (isDescriptiveHeader) {
-            const nextLine = lines[i + 1] ?? '';
+            // Skip at most one blank line between header and dialogue
+            const peekIdx = (i + 1 < lines.length && lines[i + 1].trim() === '') ? i + 2 : i + 1;
+            const nextLine = peekIdx < lines.length ? lines[peekIdx].trim() : '';
             const nextIsSafeToSkip =
                 nextLine.length > 0 &&
                 !/^S#/.test(nextLine) &&
@@ -2517,7 +2522,7 @@ function detectUnregisteredCharacters(script: string, canonicalNames: string[]):
                 nextLine.length <= 80;
             console.warn(`>>> [V177 B Remove] Descriptive role header removed: "${t}"`);
             removed.headers++;
-            if (nextIsSafeToSkip) i++;
+            if (nextIsSafeToSkip) i = peekIdx; // skip blank line (if any) + spoken line
             continue;
         }
 
