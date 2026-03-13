@@ -1341,6 +1341,9 @@ const EXCLUDED_WORDS = new Set([
     // V168 fix: fantasy/genre role nouns mistaken as character names
     '마법사', '흑마법사', '마도사', '흑마도사', '도사', '술사', '용사', '전사', '기사',
     '검사', '궁수', '해커', '닌자', '사무라이', '사제', '성직자', '악사', '음유시인',
+    // V168 fix: elemental/abstract descriptor words appearing in multi-word names
+    // e.g. "어둠의 심판관" → Pattern E hits "어둠" twice → false-positive count=2
+    '어둠', '빛', '불꽃', '폭풍', '심연', '혼돈', '질서', '운명',
 ]);
 
 // Speech-ending patterns that reliably indicate spoken Korean dialogue
