@@ -346,11 +346,20 @@ export class ScriptScribe {
                     // V141: Dialogue Density Enforcement — retry if empty or dialogue ratio < 20%
                     const density = content ? getDialogueDensity(content) : 0;
                     if ((!content || density < 0.20) && retryCount < 2) {
-                        console.warn(`>>> [V141 Dialogue Density] Chunk ${i + 1} ${!content ? 'empty' : `density ${(density * 100).toFixed(1)}%`}. Retrying...`);
-                        currentTemp = Math.min(0.9, currentTemp + 0.2);
-                        dialogueRetry = true;
-                        retryCount++;
-                        continue;
+                        // V173 short-circuit: if raw density (without monologue penalty) already passes,
+                        // the chunk is single-speaker by design — retrying won't add new speakers.
+                        // Skip straight to V143 expansion which can inject multi-character scenes.
+                        const rawDensity = content ? getDialogueDensity(content, true) : 0;
+                        if (rawDensity >= 0.20) {
+                            console.warn(`>>> [V141 Monologue Short-circuit] Chunk ${i + 1}: raw density ${(rawDensity * 100).toFixed(1)}% OK but V173 penalised to ${(density * 100).toFixed(1)}%. Skipping retry — falling through to V143 expansion.`);
+                            // break out of retry loop; density stays < 0.20 so V143 will trigger below
+                        } else {
+                            console.warn(`>>> [V141 Dialogue Density] Chunk ${i + 1} ${!content ? 'empty' : `density ${(density * 100).toFixed(1)}%`}. Retrying...`);
+                            currentTemp = Math.min(0.9, currentTemp + 0.2);
+                            dialogueRetry = true;
+                            retryCount++;
+                            continue;
+                        }
                     }
 
                     // V143: Expansion Pass — only for non-empty content that is too short or too sparse
@@ -1491,9 +1500,12 @@ RULES:
 - Natural spoken Korean only — no action descriptions
 - NO parentheticals like (혼잣말) or (잠꼬대) — just the spoken words
 - Keep each line concise (1-2 sentences)
+- MATCH the emotional tone and genre of each scene exactly (action/tense → terse; emotional → reflective; comedic → light). Do NOT inject humorous or mundane lines into tense/serious scenes.
+- ONLY write dialogue for the character named in each scene. Do NOT invent new characters (no shop staff, strangers, animals, or anyone not listed in CHARACTER INFO below).
+- The line must be dramatically consistent with what is happening in that scene — read the scene context carefully before writing.
 Example output: ["이게 맞는 길인가...", "거기서 뭐 하는 거야?", "아무 말 하지마."]
 
-[CHARACTER INFO]
+[CHARACTER INFO — only these characters exist]
 ${charContext.substring(0, 1500)}
 
 [SCENES]
@@ -2356,6 +2368,7 @@ function buildEnglishNameAliasMap(charContext: string): Map<string, string> {
         'won': '원', 'woo': '우', 'jae': '재', 'ji': '지', 'in': '인', 'yun': '윤',
         'ho': '호', 'ki': '기', 'gi': '기', 'kyung': '경', 'sung': '성',
         'tae': '태', 'uk': '욱', 'wook': '욱', 'bin': '빈',
+        'joon': '준', 'jun': '준', 'hyun': '현', 'won': '원',
     };
 
     const aliasMap = new Map<string, string>();
@@ -2385,13 +2398,27 @@ function buildEnglishNameAliasMap(charContext: string): Map<string, string> {
 function detectUnregisteredCharacters(script: string, canonicalNames: string[]): void {
     const canonicalSet = new Set(canonicalNames);
     const unregistered = new Set<string>();
+    const unregisteredAction = new Set<string>();
 
     for (const line of script.split('\n')) {
         const t = line.trim();
         if (!t || /^S#\s*\d+/.test(t)) continue;
-        // Standalone Korean name line (2-6 chars) = dialogue header format
+        // A) Standalone Korean name line (2-6 chars) = dialogue header format
         if (/^[가-힣]{2,6}$/.test(t) && !EXCLUDED_WORDS.has(t) && !canonicalSet.has(t)) {
             unregistered.add(t);
+        }
+        // B) Action line: Korean name in quotes/brackets or as "발신자는 'X'" pattern
+        // Catches injected names like 한나, 최선배 that appear inline but not as headers
+        const inlineMatches = [
+            ...t.matchAll(/[''"「]([가-힣]{2,5})[''"」]/g),          // quoted name: '한나', "최선배"
+            ...t.matchAll(/발신자[는은]\s*[''"「]?([가-힣]{2,5})[''"」]?/g), // 발신자는 '한나'
+            ...t.matchAll(/([가-힣]{2,5})\s*(?:라고|에게|한테)\s*전화/g),    // 한나에게 전화
+        ];
+        for (const m of inlineMatches) {
+            const name = m[1];
+            if (!EXCLUDED_WORDS.has(name) && !canonicalSet.has(name)) {
+                unregisteredAction.add(name);
+            }
         }
     }
 
@@ -2399,6 +2426,9 @@ function detectUnregisteredCharacters(script: string, canonicalNames: string[]):
         console.warn(`>>> [V177 Unregistered Characters] ${unregistered.size} character(s) used as dialogue headers are NOT in charContext NAME ROSTER: [${[...unregistered].join(', ')}]`);
     } else {
         console.log(`>>> [V177 Unregistered Characters] OK — all dialogue speakers are in charContext NAME ROSTER.`);
+    }
+    if (unregisteredAction.size > 0) {
+        console.warn(`>>> [V177 Inline Names] ${unregisteredAction.size} unregistered name(s) found in action lines: [${[...unregisteredAction].join(', ')}]`);
     }
 }
 
@@ -2513,7 +2543,8 @@ function normalizeCharacterNames(script: string, charContext: string): string {
     const aliasMap = buildEnglishNameAliasMap(charContext);
     let result = script;
     for (const [alias, canonical] of aliasMap) {
-        const re = new RegExp(alias, 'g');
+        // V175 fix: negative lookahead for Korean chars — prevents replacing "강태" inside already-complete "강태준"
+        const re = new RegExp(alias + '(?![가-힣])', 'g');
         const count = (result.match(re) || []).length;
         if (count > 0) {
             result = result.replace(re, canonical);
