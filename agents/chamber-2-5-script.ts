@@ -2024,7 +2024,14 @@ function fixDialogueFormatErrors(script: string): string {
 
         // Detect: current line is a name/header, next line is ALSO a standalone Korean name,
         // and the line after that is a spoken line (non-empty, not a slug, not another name)
-        const isHeader = /^[가-힣\s의은는이가을를도]{2,12}$/.test(t) && !/^S#/.test(t);
+        //
+        // V178 safety conditions (tightened to prevent action-line false positives):
+        // - isHeader: must be PURE Korean chars only (no spaces, no particles like 이/가/을/를).
+        //   Short action fragments like "그는 멈춘다" have spaces → excluded.
+        //   Only standalone name-like tokens (e.g. "변이된남자", "검은로브의남자") qualify.
+        //   Additionally must be ≥ 4 chars to exclude 2-char canonical names from being
+        //   treated as orphaned headers (2-char names are valid headers — keep them).
+        const isHeader = /^[가-힣]{4,12}$/.test(t) && !/^S#/.test(t) && !EXCLUDED_WORDS.has(t);
         const nextIsName = /^[가-힣]{2,6}$/.test(next) && !/^S#/.test(next);
         const afterIsSpoken = afterNext.length > 0 && !/^S#/.test(afterNext) && !/^[가-힣]{2,6}$/.test(afterNext);
 
@@ -2421,7 +2428,7 @@ function buildEnglishNameAliasMap(charContext: string): Map<string, string> {
         'won': '원', 'woo': '우', 'jae': '재', 'ji': '지', 'in': '인', 'yun': '윤',
         'ho': '호', 'ki': '기', 'gi': '기', 'kyung': '경', 'sung': '성',
         'tae': '태', 'uk': '욱', 'wook': '욱', 'bin': '빈',
-        'joon': '준', 'jun': '준', 'hyun': '현', 'won': '원',
+        'joon': '준',
     };
 
     const aliasMap = new Map<string, string>();
@@ -2465,33 +2472,23 @@ function detectUnregisteredCharacters(script: string, canonicalNames: string[]):
 
         // A) Standalone pure Korean name (2-6 chars) not in roster → remove header + spoken line
         if (/^[가-힣]{2,6}$/.test(t) && !EXCLUDED_WORDS.has(t) && !canonicalSet.has(t)) {
+            const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : '';
+            // Safety: only skip next line if it looks like actual spoken dialogue
+            // (non-empty, not a slug, not another standalone name, not an action line ending in period)
+            const nextIsSafeToSkip = nextLine.length > 0 &&
+                !/^S#/.test(nextLine) &&
+                !/^[가-힣]{2,6}$/.test(nextLine) &&
+                nextLine.length <= 80;
             console.warn(`>>> [V177 Remove] Unregistered dialogue header removed: "${t}"`);
             removed.headers++;
-            i++; // skip the spoken line that follows
+            if (nextIsSafeToSkip) i++; // skip the spoken line that follows
             continue;
         }
 
-        // B) Descriptive standalone header: any non-slug, non-action line that is immediately
-        //    followed by a spoken line (≤60 chars, no period at end) and is not a canonical name.
-        //    Pattern: line contains only Korean chars + spaces/의/의/는/이/가/을/를/도, ≤12 chars,
-        //    not starting with S# and next line looks like spoken dialogue.
-        const isDescriptiveHeader =
-            /^[가-힣\s의은는이가을를도]{2,12}$/.test(t) &&
-            !canonicalSet.has(t) &&
-            !EXCLUDED_WORDS.has(t) &&
-            !/^S#/.test(t) &&
-            i + 1 < lines.length &&
-            lines[i + 1].trim().length > 0 &&
-            lines[i + 1].trim().length <= 60 &&
-            !/^S#/.test(lines[i + 1].trim()) &&
-            !/[.。]$/.test(lines[i + 1].trim());
-
-        if (isDescriptiveHeader) {
-            console.warn(`>>> [V177 Remove] Descriptive unregistered header removed: "${t}"`);
-            removed.descriptive++;
-            i++; // skip spoken line
-            continue;
-        }
+        // B) Descriptive standalone header detection — intentionally disabled (too risky).
+        // Short action-line fragments match the same pattern as descriptive headers.
+        // Will be re-enabled only after a stricter discriminator is designed.
+        // [DISABLED] const isDescriptiveHeader = ...
 
         // C) Inline unregistered names — remove offending sentence(s) from action lines
         let actionLine = lines[i];
