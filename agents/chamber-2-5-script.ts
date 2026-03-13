@@ -1407,7 +1407,9 @@ function getDialogueDensity(content: string, rawMode = false): number {
         const line = lines[i];
         if (line.startsWith('S#')) continue; // skip sluglines
         totalLines++;
-        const isKoreanName = /^[가-힣]{2,6}$/.test(line) && !EXCLUDED_WORDS.has(line) && !line.includes('.');
+        // V173 guard: exclude particle-ending words (e.g. "골목길에서") that are not character names
+        const PARTICLE_SUFFIX_RE = /(?:에서|에게|으로|로서|로부터|과|와|이라|이나|이며|이고|들이|들은|들을|부터|까지|마다|조차|라도)$/;
+        const isKoreanName = /^[가-힣]{2,6}$/.test(line) && !EXCLUDED_WORDS.has(line) && !line.includes('.') && !PARTICLE_SUFFIX_RE.test(line);
         const isEnglishName = /^[A-Z][A-Z\s]{1,24}$/.test(line);
         if ((isKoreanName || isEnglishName) && i + 1 < lines.length && !lines[i + 1].startsWith('S#') && lines[i + 1].length > 4) {
             speakers.add(line); // track who speaks
@@ -2495,7 +2497,7 @@ function detectUnregisteredCharacters(script: string, canonicalNames: string[]):
         // Matches single-word OR two-word compound headers (e.g. "편의점 직원", "검은 그림자").
         // Suffix whitelist ensures short action-line fragments are never accidentally matched.
         const DESCRIPTIVE_ROLE_SUFFIXES = [
-            '직원', '남자', '여자', '노인', '노숙자', '취객', '행인', '사람',
+            '직원', '알바', '남자', '여자', '노인', '노숙자', '취객', '행인', '사람',
             '선배', '후배', '형사', '경찰', '경비', '의사', '간호사', '점원',
             '관객', '구경꾼', '목격자', '승객', '운전사',
             '그림자', '존재', '인물', '병사', '군인', '악당',
