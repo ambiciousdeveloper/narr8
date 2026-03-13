@@ -1338,6 +1338,9 @@ const EXCLUDED_WORDS = new Set([
     '잠재력', '역할', '수행', '교육', '방식', '성격', '비밀', '관계', '능력',
     '미래', '세대', '흥미', '과거', '멘토', '조언', '조력', '릴리프', '결정',
     '현대', '전통', '융합', '수업', '스파이', '이중', '마법', '무술', '개성',
+    // V168 fix: fantasy/genre role nouns mistaken as character names
+    '마법사', '흑마법사', '마도사', '흑마도사', '도사', '술사', '용사', '전사', '기사',
+    '검사', '궁수', '해커', '닌자', '사무라이', '사제', '성직자', '악사', '음유시인',
 ]);
 
 // Speech-ending patterns that reliably indicate spoken Korean dialogue
@@ -2485,10 +2488,32 @@ function detectUnregisteredCharacters(script: string, canonicalNames: string[]):
             continue;
         }
 
-        // B) Descriptive standalone header detection — intentionally disabled (too risky).
-        // Short action-line fragments match the same pattern as descriptive headers.
-        // Will be re-enabled only after a stricter discriminator is designed.
-        // [DISABLED] const isDescriptiveHeader = ...
+        // B) Descriptive standalone header detection — role-suffix whitelist approach (V177 B re-enabled).
+        // Only matches lines that END with a known anonymous-role suffix, so action-line fragments are
+        // never accidentally matched.  No syllables other than [가-힣] are allowed (공백 불허).
+        const DESCRIPTIVE_ROLE_SUFFIXES = [
+            '직원', '남자', '여자', '노인', '노숙자', '취객', '행인', '사람',
+            '선배', '후배', '형사', '경찰', '경비', '의사', '간호사', '점원',
+            '관객', '구경꾼', '목격자', '승객', '운전사',
+        ];
+        const isDescriptiveHeader =
+            !canonicalSet.has(t) &&
+            !EXCLUDED_WORDS.has(t) &&
+            /^[가-힣]{2,8}$/.test(t) &&          // pure Korean, no spaces, 2-8 chars
+            !/^S#/.test(t) &&
+            DESCRIPTIVE_ROLE_SUFFIXES.some(suffix => t.endsWith(suffix));
+        if (isDescriptiveHeader) {
+            const nextLine = lines[i + 1] ?? '';
+            const nextIsSafeToSkip =
+                nextLine.length > 0 &&
+                !/^S#/.test(nextLine) &&
+                !/^[가-힣]{2,6}$/.test(nextLine) &&
+                nextLine.length <= 80;
+            console.warn(`>>> [V177 B Remove] Descriptive role header removed: "${t}"`);
+            removed.headers++;
+            if (nextIsSafeToSkip) i++;
+            continue;
+        }
 
         // C) Inline unregistered names — remove offending sentence(s) from action lines
         let actionLine = lines[i];
