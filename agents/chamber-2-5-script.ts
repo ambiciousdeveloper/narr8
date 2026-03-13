@@ -648,6 +648,10 @@ ${chunk}
         // Must run BEFORE V152 scrub so empty scenes don't survive into the final script.
         fullScript = removeEmptyScenes(fullScript);
 
+        // V178: Dialogue format normalizer — fixes orphaned header lines that cause a character
+        // name to be rendered as a spoken line (e.g. "변이된 남자\n한결\n젠장...!" → "한결\n젠장...!")
+        fullScript = fixDialogueFormatErrors(fullScript);
+
         // V152: Final internal-state scrub on assembled script (AI pass + regex fallback)
         fullScript = await scrubInternalStatements(fullScript, model);
 
@@ -739,8 +743,8 @@ ${chunk}
             } else {
                 console.log(`>>> [Final Verify] ✓ All slug/location rules satisfied. Total scenes: ${finalScenes}.`);
             }
-            // V177: Post-generation check for characters invented beyond the approved roster
-            detectUnregisteredCharacters(fullScript, canonicalNames);
+            // V177: Post-generation check + auto-removal of characters invented beyond the approved roster
+            fullScript = detectUnregisteredCharacters(fullScript, canonicalNames);
         }
 
         return {
@@ -1995,6 +1999,55 @@ function removeEmptyScenes(script: string): string {
 }
 
 /**
+ * V178: Dialogue Format Normalizer
+ * Fixes the pattern where a dialogue header is immediately followed by another standalone
+ * Korean name on its own line (which then gets rendered as a spoken line).
+ *
+ * Pattern to fix:
+ *   변이된 남자        ← descriptive/canonical header
+ *   한결               ← orphaned name line (should be action, not dialogue)
+ *   젠장...!           ← actual spoken line
+ *
+ * Becomes:
+ *   한결               ← promote orphaned name as the correct speaker header
+ *   젠장...!
+ */
+function fixDialogueFormatErrors(script: string): string {
+    const lines = script.split('\n');
+    const cleaned: string[] = [];
+    let fixed = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+        const t = lines[i].trim();
+        const next = i + 1 < lines.length ? lines[i + 1].trim() : '';
+        const afterNext = i + 2 < lines.length ? lines[i + 2].trim() : '';
+
+        // Detect: current line is a name/header, next line is ALSO a standalone Korean name,
+        // and the line after that is a spoken line (non-empty, not a slug, not another name)
+        const isHeader = /^[가-힣\s의은는이가을를도]{2,12}$/.test(t) && !/^S#/.test(t);
+        const nextIsName = /^[가-힣]{2,6}$/.test(next) && !/^S#/.test(next);
+        const afterIsSpoken = afterNext.length > 0 && !/^S#/.test(afterNext) && !/^[가-힣]{2,6}$/.test(afterNext);
+
+        if (isHeader && nextIsName && afterIsSpoken) {
+            // Discard current (wrong) header; promote 'next' as the speaker
+            console.warn(`>>> [V178 Format Fix] Removed orphaned header "${t}", promoted "${next}" as speaker.`);
+            fixed++;
+            // Don't push current line; let i advance to 'next' naturally
+            continue;
+        }
+
+        cleaned.push(lines[i]);
+    }
+
+    if (fixed > 0) {
+        console.warn(`>>> [V178 Dialogue Format] Fixed ${fixed} orphaned header(s).`);
+    } else {
+        console.log(`>>> [V178 Dialogue Format] OK — no format errors detected.`);
+    }
+    return cleaned.join('\n');
+}
+
+/**
  * V149: Deterministic Base Location Streak Fix
  *
  * Previous approach (AI): reliably failed — AI added sub-suffixes (입구/끝/안쪽) that
@@ -2390,46 +2443,98 @@ function buildEnglishNameAliasMap(charContext: string): Map<string, string> {
 }
 
 /**
- * V177: Unregistered Character Detector
- * Scans the assembled script for standalone Korean name lines (dialogue headers).
- * Warns if any name is NOT in the canonicalNames roster extracted from charContext.
- * These represent characters the AI invented beyond the approved roster.
+ * V177: Unregistered Character Detector + Auto-Remover
+ * Scans the assembled script for:
+ *   A) Standalone Korean name lines (dialogue headers) — exact 2-6 char match
+ *   B) Descriptive character headers (e.g. "편의점 직원", "담배 피우는 남자", "노숙자") that follow
+ *      the screenplay header pattern (standalone line immediately before a spoken line)
+ *   C) Inline action-line names (quoted, 발신자는 X, X에게 전화 patterns)
+ *
+ * For A+B: removes the header line AND its following spoken line from the script.
+ * For C: removes just the offending action sentence.
  */
-function detectUnregisteredCharacters(script: string, canonicalNames: string[]): void {
+function detectUnregisteredCharacters(script: string, canonicalNames: string[]): string {
     const canonicalSet = new Set(canonicalNames);
-    const unregistered = new Set<string>();
-    const unregisteredAction = new Set<string>();
+    const removed = { headers: 0, descriptive: 0, inline: 0 };
 
-    for (const line of script.split('\n')) {
-        const t = line.trim();
-        if (!t || /^S#\s*\d+/.test(t)) continue;
-        // A) Standalone Korean name line (2-6 chars) = dialogue header format
+    const lines = script.split('\n');
+    const cleaned: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        const t = lines[i].trim();
+
+        // A) Standalone pure Korean name (2-6 chars) not in roster → remove header + spoken line
         if (/^[가-힣]{2,6}$/.test(t) && !EXCLUDED_WORDS.has(t) && !canonicalSet.has(t)) {
-            unregistered.add(t);
+            console.warn(`>>> [V177 Remove] Unregistered dialogue header removed: "${t}"`);
+            removed.headers++;
+            i++; // skip the spoken line that follows
+            continue;
         }
-        // B) Action line: Korean name in quotes/brackets or as "발신자는 'X'" pattern
-        // Catches injected names like 한나, 최선배 that appear inline but not as headers
-        const inlineMatches = [
-            ...t.matchAll(/[''"「]([가-힣]{2,5})[''"」]/g),          // quoted name: '한나', "최선배"
-            ...t.matchAll(/발신자[는은]\s*[''"「]?([가-힣]{2,5})[''"」]?/g), // 발신자는 '한나'
-            ...t.matchAll(/([가-힣]{2,5})\s*(?:라고|에게|한테)\s*전화/g),    // 한나에게 전화
-        ];
-        for (const m of inlineMatches) {
-            const name = m[1];
-            if (!EXCLUDED_WORDS.has(name) && !canonicalSet.has(name)) {
-                unregisteredAction.add(name);
-            }
+
+        // B) Descriptive standalone header: any non-slug, non-action line that is immediately
+        //    followed by a spoken line (≤60 chars, no period at end) and is not a canonical name.
+        //    Pattern: line contains only Korean chars + spaces/의/의/는/이/가/을/를/도, ≤12 chars,
+        //    not starting with S# and next line looks like spoken dialogue.
+        const isDescriptiveHeader =
+            /^[가-힣\s의은는이가을를도]{2,12}$/.test(t) &&
+            !canonicalSet.has(t) &&
+            !EXCLUDED_WORDS.has(t) &&
+            !/^S#/.test(t) &&
+            i + 1 < lines.length &&
+            lines[i + 1].trim().length > 0 &&
+            lines[i + 1].trim().length <= 60 &&
+            !/^S#/.test(lines[i + 1].trim()) &&
+            !/[.。]$/.test(lines[i + 1].trim());
+
+        if (isDescriptiveHeader) {
+            console.warn(`>>> [V177 Remove] Descriptive unregistered header removed: "${t}"`);
+            removed.descriptive++;
+            i++; // skip spoken line
+            continue;
         }
+
+        // C) Inline unregistered names — remove offending sentence(s) from action lines
+        let actionLine = lines[i];
+        let inlineRemoved = false;
+        // quoted name patterns
+        for (const pattern of [
+            /[''"「][가-힣]{2,5}[''"」]라고\s*(?:표시|뜨|보|나타)/g,  // 액정에는 '이선배'라고 떠 있다
+            /발신자[는은]\s*[''"「]?[가-힣]{2,5}[''"」]?/g,            // 발신자는 '이선배'
+            /[가-힣]{2,5}\s*(?:에게|한테)\s*전화[가가]/g,               // 이선배에게 전화가
+        ]) {
+            const before = actionLine;
+            actionLine = actionLine.replace(pattern, (match) => {
+                // Extract name from match and check if unregistered
+                const nameM = match.match(/[가-힣]{2,5}/g);
+                if (nameM) {
+                    for (const n of nameM) {
+                        if (!canonicalSet.has(n) && !EXCLUDED_WORDS.has(n) && n.length >= 2) {
+                            inlineRemoved = true;
+                            return ''; // remove the matched segment
+                        }
+                    }
+                }
+                return match;
+            });
+            if (before !== actionLine) removed.inline++;
+        }
+        if (inlineRemoved) {
+            console.warn(`>>> [V177 Inline Remove] Unregistered inline name removed from action line.`);
+            // Keep line (with segment removed) only if non-empty after cleaning
+            if (actionLine.trim()) cleaned.push(actionLine);
+            continue;
+        }
+
+        cleaned.push(lines[i]);
     }
 
-    if (unregistered.size > 0) {
-        console.warn(`>>> [V177 Unregistered Characters] ${unregistered.size} character(s) used as dialogue headers are NOT in charContext NAME ROSTER: [${[...unregistered].join(', ')}]`);
+    const totalRemoved = removed.headers + removed.descriptive + removed.inline;
+    if (totalRemoved > 0) {
+        console.warn(`>>> [V177 Unregistered Characters] Removed ${totalRemoved} unregistered element(s) — headers: ${removed.headers}, descriptive: ${removed.descriptive}, inline: ${removed.inline}`);
     } else {
         console.log(`>>> [V177 Unregistered Characters] OK — all dialogue speakers are in charContext NAME ROSTER.`);
     }
-    if (unregisteredAction.size > 0) {
-        console.warn(`>>> [V177 Inline Names] ${unregisteredAction.size} unregistered name(s) found in action lines: [${[...unregisteredAction].join(', ')}]`);
-    }
+    return cleaned.join('\n');
 }
 
 /**
