@@ -1109,7 +1109,7 @@ Professional Script Adaptor.
 ${confirmedSlots.length > 0
     ? `Your role for this section: **Scene Cinematographer** — the scene structure (sluglines, locations, time, characters) is PRE-CONFIRMED from the source novel. You write ONLY the action lines (physical, filmable) and dialogue for each confirmed scene. Do NOT invent new scenes, skip scenes, or change sluglines.`
     : `Convert PROSE into a high-density, visual SCREENPLAY in **${langLabel}** ONLY.`}
-${pronounLock}${timeLock}${locationLock}${dreamBan}${dialogueAlert}${personaBlock}
+${pronounLock}${timeLock}${locationLock}${dreamBan}${dialogueAlert}${personaBlock}${guidelinesBlock ? `\n${guidelinesBlock}\n` : ''}
 [GOLDEN FORMAT SAMPLE — 2-character exchange (this is the standard)]
 ⚠️ IMPORTANT: The names below (캐릭터A, 캐릭터B) are FORMAT PLACEHOLDERS ONLY.
 You MUST replace them with the actual character names from [CHARACTER DB] and [STORY BEATS].
@@ -1147,6 +1147,11 @@ ${confirmedSlots.length > 0 ? confirmedSkeletonBlock : (p.sceneSkeleton ? p.scen
    × "마음속에", "내면", "~을 느낀다", "생각에 잠겼다", "불안감을 느끼", "혼란스러움", "깨달았다", "복잡한 감정"
    × "~인 듯", "마치 ~같았다", "~한 표정" (unless followed by a specific physical detail)
    × Any sentence describing internal emotion, intention, or attitude that has no physical manifestation
+   × Literary metaphors: "알고리즘의 미로", "정보의 홍수", "진실의 칼날", "파장이 온몸을 휘감는다"
+   × Internal body sensations: "심장이 쿵쾅", "손가락 끝이 저릿", "등줄기를 타고 흐르는 식은땀", "손가락 끝이 차갑게 식어"
+   × Psychological drive: "복수심을 불태운다", "복수심으로 불타오른다", "승리를 예감한다", "~기운이 느껴진다"
+   × Author commentary/prophecy: "반드시 승리할 것이다", "이제 진짜 싸움이 시작", "새로운 희망이 떠오른다"
+   × Non-visual senses (smell/internal): "냄새로 가득", "코를 간지럽힌다", "쓴맛이 정신을 번쩍"
 4. **DIALOGUE PURITY**: No "(혼잣말)", "(침묵)". Action lines for silence.
 5. **DIALOGUE MANDATORY**: Every scene MUST contain at least ONE spoken dialogue line. Characters MUST speak. A scene with ZERO dialogue lines is INVALID and will be rejected. OUTPUT WITH NO DIALOGUE WILL BE DISCARDED. IF THE SOURCE HAS NO DIALOGUE, YOU MUST INVENT APPROPRIATE DIALOGUE — DO NOT use the absence of dialogue in the source as an excuse to omit it.
 6. **NO CONSECUTIVE SILENT SCENES**: You MUST NOT write 3 or more consecutive scenes without dialogue. Insert spoken lines to break any silent streak.
@@ -1187,7 +1192,6 @@ ${confirmedSlots.length > 0 ? confirmedSkeletonBlock : (p.sceneSkeleton ? p.scen
     × Sub-location (계단, 복도, 계단, 거울 앞 etc.) MUST appear BEFORE the dash: "INT. 건물 계단 - 아침" (✓) NOT "INT. 건물 - 계단" (✗).
     × FORBIDDEN action words as sub-location: "전투", "결투", "격전", "추격", "전장" — these are EVENTS not places. Describe the event in the ACTION LINE instead. Use the physical place: "EXT. 서울 뒷골목 - 저녁" (✓) NOT "EXT. 서울 뒷골목 전투 - 저녁" (✗).
     × A BATTLE or CHASE in the same general area must NOT get a new sub-location slug for every exchange. Write the entire fight under ONE slug, and use action lines to show movement within that space.
-${guidelinesBlock}
 [[/SYSTEM_PROTOCOL]]
 
 ${p.canonicalNames?.length > 0 ? `🔒 [CHARACTER NAME ROSTER — EXACT SPELLING — MANDATORY]
