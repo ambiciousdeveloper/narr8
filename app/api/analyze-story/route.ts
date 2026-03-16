@@ -104,14 +104,19 @@ export async function POST(req: NextRequest) {
 
       if (origL1) {
         bpContexts.push(`
-          [SOURCE MATERIAL (ORIGINAL L1)]
+          [SOURCE MATERIAL (ORIGINAL L1) — 구조·테마 참조 전용]
+          ⚠️ 아래 내용은 각색 구조 설계를 위한 참조 자료입니다.
+          ⚠️ 원작의 고유명사(인물명, 지명, 마법명 등)를 출력 JSON에 절대 그대로 사용하지 마십시오.
+          ⚠️ 반드시 각색된 세계관의 새로운 이름으로 완전 치환하여 사용하십시오.
           Title: ${origL1.unit_title_kr}
           Summary: ${origL1.original_body_kr}
         `);
       }
       if (origBP) {
         bpContexts.push(`
-          [SOURCE BLUEPRINT (ORIGINAL)]
+          [SOURCE BLUEPRINT (ORIGINAL) — 캐릭터·세계관 매핑 참조 전용]
+          ⚠️ character_arcs의 original_name은 내부 매핑용입니다. 출력 JSON의 synthesized 필드에 original_name을 절대 노출하지 마십시오.
+          ⚠️ glossary의 원작 용어들을 각색된 용어로 완전 교체하십시오.
           ${JSON.stringify(origBP)}
         `);
       }
@@ -134,7 +139,8 @@ export async function POST(req: NextRequest) {
     } catch (err) { console.warn(">>> SOP 로드 실패."); }
 
     // [Step 2] Architect Execution
-    const sourceMaterial = (level === 'L1') ? context : '';
+    // ADAPTED 모드에서는 raw 원문 대신 bpContext(origL1 + origBP)를 통해 원작 정보를 전달
+    const sourceMaterial = (level === 'L1' && !isAdapted) ? context : '';
 
     const contextForAgent = `
       Project Identity: ${project.source_identity_kr}
