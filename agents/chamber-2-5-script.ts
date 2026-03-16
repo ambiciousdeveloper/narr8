@@ -131,7 +131,9 @@ export class ScriptScribe {
         language: 'KO' | 'EN' = 'KO',
         targetLength: number,
         mode: 'CREATE' | 'TRANSLATE' | 'ADAPT_TO_SCRIPT' = 'CREATE',
-        refText: string = ""
+        refText: string = "",
+        worldCountry: string = "",
+        worldCity: string = ""
     ): Promise<AgentResponse> {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
         const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
@@ -249,6 +251,8 @@ export class ScriptScribe {
                     characters: charContext,
                     blueprint: activeBlueprint,
                     settings: worldSettings,
+                    worldCountry,
+                    worldCity,
                     canonicalNames,
                     sceneSkeleton,
                     confirmedSlots,  // V171: confirmed scene slots from source novel (empty = fallback to V169)
@@ -1101,18 +1105,20 @@ ${confirmedSlots.length > 0
     : `Convert PROSE into a high-density, visual SCREENPLAY in **${langLabel}** ONLY.`}
 ${pronounLock}${timeLock}${locationLock}${dreamBan}${dialogueAlert}${personaBlock}
 [GOLDEN FORMAT SAMPLE — 2-character exchange (this is the standard)]
+⚠️ IMPORTANT: The names below (캐릭터A, 캐릭터B) are FORMAT PLACEHOLDERS ONLY.
+You MUST replace them with the actual character names from [CHARACTER DB] and [STORY BEATS].
 S# 10. INT. 낡은 무도장 - 밤
 먼지 쌓인 매트리스 위로 달빛이 스며든다.
-강태준, 가죽 장갑을 탁자 위로 던진다. 툭, 둔탁한 소리.
-문이 삐걱거리며 열린다. 이서아가 들어선다. 그녀의 눈이 바닥에 놓인 장갑을 포착한다.
-이서아
+캐릭터A, 가죽 장갑을 탁자 위로 던진다. 툭, 둔탁한 소리.
+문이 삐걱거리며 열린다. 캐릭터B가 들어선다. 그녀의 눈이 바닥에 놓인 장갑을 포착한다.
+캐릭터B
 또 시작하려고요?
-강태준
+캐릭터A
 ...네 알 바 아니다.
-이서아, 장갑을 집어 그에게 내민다. 그는 받지 않는다.
-이서아
+캐릭터B, 장갑을 집어 그에게 내민다. 그는 받지 않는다.
+캐릭터B
 혼자서는 감당 못 해요. 그거 알잖아요.
-강태준은 등을 돌린다. 하지만 손이 장갑 쪽으로 천천히 움직인다.
+캐릭터A는 등을 돌린다. 하지만 손이 장갑 쪽으로 천천히 움직인다.
 
 [TARGET VOLUME]
 This section MUST reach **${p.targetChars} characters** total. ${confirmedSlots.length > 0
@@ -1140,8 +1146,8 @@ ${confirmedSlots.length > 0 ? confirmedSkeletonBlock : (p.sceneSkeleton ? p.scen
 6. **NO CONSECUTIVE SILENT SCENES**: You MUST NOT write 3 or more consecutive scenes without dialogue. Insert spoken lines to break any silent streak.
 7. **DIALOGUE DENSITY**: At least 30% of all lines in the output must be character dialogue lines (character name on its own line followed by spoken text).
 8. **3:1 RULE**: After every 3 action lines, you MUST write a dialogue exchange (character name + spoken line). This is a hard structural constraint. A "block" of more than 3 consecutive action lines with no dialogue is a formatting error that will be rejected.
-9. **DIALOGUE FORMAT**: Write the character name alone on one line, then the spoken line below it. Example:
-김해리
+9. **DIALOGUE FORMAT**: Write the character name alone on one line, then the spoken line below it. Example (use actual character names from [CHARACTER DB], NOT these placeholders):
+캐릭터A
 여기서 뭘 하는 거요?
 10. **INVENT DIALOGUE**: Screenwriters CREATE dialogue. Even when adapting prose with no dialogue, you MUST give characters voices. Invent lines that reveal character, advance plot, or react to the situation.
 11. **NO REPETITION**: Every scene MUST advance the story forward. If a scene does not change the situation, location, or character state compared to the previous scene — DO NOT write it. Merge or skip it. Writing the same hesitation, awakening, or action twice in two consecutive scenes is a CRITICAL ERROR.
@@ -1195,6 +1201,7 @@ Glossary: ${bpGlossary}
 
 [WORLD SETTINGS]
 ${(p.settings || "").substring(0, 2000)}
+${p.worldCountry ? `\n[MANDATORY NAMING RULE]\n배경 국가: ${p.worldCountry}${p.worldCity ? ` / ${p.worldCity}` : ''}\n이 배경에 맞는 이름만 사용하라. 위 GOLDEN FORMAT SAMPLE의 캐릭터A·캐릭터B는 포맷 예시일 뿐이며, 실제 씬에서는 반드시 [CHARACTER DB]에 등록된 실제 이름을 사용하라.` : ''}
 
 [STORY BEATS]
 ${p.plot}

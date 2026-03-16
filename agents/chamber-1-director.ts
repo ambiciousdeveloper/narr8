@@ -13,15 +13,20 @@ export class GrandDirector {
     // 1. Input Parsing (Handle both raw string and JSON object string)
     let facts = inputJson;
     let characters: any[] = [];
+    let worldCountry = '';
+    let worldCity = '';
     try {
       const parsed = JSON.parse(inputJson);
       if (parsed.facts) {
         facts = parsed.facts; // Main story content
         characters = parsed.characters || [];
+        worldCountry = parsed.worldCountry || parsed.world_country_kr || parsed.world_country_en || '';
+        worldCity = parsed.worldCity || parsed.world_city_kr || parsed.world_city_en || '';
       }
     } catch (e) {
       // If parsing fails, treat inputJson as raw text facts
     }
+    const namingRule = GrandDirector.buildNamingRule(worldCountry, worldCity);
 
     // 2. Initialize Gemini Model (Direct instantiation for reliability)
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
@@ -35,6 +40,10 @@ export class GrandDirector {
         [Adaptation Level: ${adaptationLevel}/5]
         - Level 1-2: Enhance strict structure and foreshadowing while keeping original plot.
         - Level 3-5: Reinterpret the structure, themes, and character arcs creatively.
+
+        [MANDATORY NAMING RULE — 최우선 적용]
+        ${namingRule}
+        이 규칙을 어기는 이름(예: 배경이 일본인데 한국식 성씨 생성)은 즉시 수정하라.
 
         [Output JSON Schema]
         You MUST return ONLY a JSON object with this exact structure.
@@ -194,24 +203,34 @@ export class GrandDirector {
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
       const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
+      // 배경 국가 기반 이름 규칙 생성
+      const worldCountry: string = worldContext.world_country_kr || worldContext.world_country_en || worldContext.country || '';
+      const worldCity: string = worldContext.world_city_kr || worldContext.world_city_en || worldContext.world_name_kr || '';
+      const namingRule = GrandDirector.buildNamingRule(worldCountry, worldCity);
+
       const context = `
                  [WORLD CONTEXT]
-                 World Name: ${worldContext.world_name_kr}
+                 World Name: ${worldContext.world_name_kr || worldCity}
+                 Country: ${worldCountry || '미지정'}
                  Genre/Tone: ${worldContext.genre || 'Fantasy'}
-                 Naming Style: Create names fitting for this world.
-     
+                 Cultural Setting: ${worldContext.cultural_setting_kr || worldContext.cultural_setting_en || ''}
+
+                 [MANDATORY NAMING RULE]
+                 ${namingRule}
+
                  [CHARACTERS TO NAMING]
                  ${characters.map(c => `- ID: ${c.id}, Original: ${c.original_name_en || c.original_name_kr || 'Unknown'}, Role: ${c.role_kr || 'Extra'}`).join('\n')}
-     
+
                  [INSTRUCTION]
-                 Generate distinct, fitting names for these extra characters.
+                 Generate distinct, fitting names for these extra characters following the MANDATORY NAMING RULE above.
                  Return a JSON array of objects with 'id' and 'new_name'.
                  Example: [{"id": "...", "new_name": "NewName"}]
              `;
 
       const prompt = `
                  You are the Naming Specialist.
-                 Based on the world context, rename these extra characters to fit the setting.
+                 Based on the world context and MANDATORY NAMING RULE, rename these extra characters to fit the setting.
+                 The naming rule is the highest priority — do NOT generate names that violate the country-based naming convention.
                  Avoid using the original names if the adaptation level implies change.
                  Output ONLY valid JSON.
                  ${context}
@@ -343,5 +362,33 @@ export class GrandDirector {
       console.error(">>> [GrandDirector] Prose Extraction Failed:", error);
       return ["Beat 1: Analysis failed, falling back to raw prose content."];
     }
+  }
+
+  /**
+   * buildNamingRule
+   * 배경 국가에 따른 이름 생성 규칙을 반환합니다.
+   * fillExtraNames, buildBlueprint 등 이름 생성이 필요한 모든 메서드에서 공유합니다.
+   */
+  public static buildNamingRule(worldCountry: string, worldCity: string = ''): string {
+    const c = (worldCountry || '').toLowerCase();
+    const location = [worldCity, worldCountry].filter(Boolean).join(', ');
+    const hint = location ? `배경(${location})` : '프로젝트 배경';
+
+    if (c.includes('japan') || c.includes('일본')) {
+      return `${hint}이 일본이므로 반드시 일본식 이름을 사용하라. 성씨 예: 霧島·黒木·白銀·緋山·蒼井·夜刀·朧·雪代 등. 이름 예: 蒼·零·渉·夜叉·朔·紫苑 등. 한국식 성씨(김·이·박·최·정 등)는 절대 사용 금지.`;
+    }
+    if (c.includes('china') || c.includes('중국')) {
+      return `${hint}이 중국이므로 반드시 중국식 이름을 사용하라. 성씨 예: 鄒·聶·靳·顧·謝·燕·蕭·凌 등. 한국식 성씨는 절대 사용 금지.`;
+    }
+    if (c.includes('korea') || c.includes('한국')) {
+      return `${hint}이 한국이므로 한국식 이름을 사용하되 AI 클리셰(강태준·김민준·이서연 등)는 절대 사용 금지. 개성 있는 성씨(범·제갈·남궁·견·선우 등)를 권장.`;
+    }
+    if (c.includes('usa') || c.includes('미국') || c.includes('america')) {
+      return `${hint}이 미국이므로 영미식 이름을 사용하라. 아시아계 성씨는 사용 금지 (해당 문화권 캐릭터로 명시된 경우 제외).`;
+    }
+    if (!worldCountry) {
+      return `배경 국가가 명시되지 않았습니다. 세계관의 문화적 맥락에 맞는 이름을 사용하고, 특정 국가 성씨를 임의로 적용하지 마라.`;
+    }
+    return `${hint}의 문화·언어 체계에 맞는 이름을 사용하라. 배경과 관련 없는 국가의 이름 체계를 임의로 사용하지 마라.`;
   }
 }

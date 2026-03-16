@@ -81,20 +81,24 @@ function buildArchitectPrompt(level: string, context: string, isAdapted: boolean
   const objective = getObjective(level, isAdapted);
   const instructions = getAdditionalInstructions(level, isAdapted, extraContext?.customSop);
 
+  // 배경 국가 기반 네이밍 가이드 (동적 생성)
+  const worldCountry: string = extraContext?.worldCountry || extraContext?.worldCountryEn || '';
+  const worldCity: string = extraContext?.worldCity || extraContext?.worldCityEn || '';
+  const namingGuide = buildNamingGuide(worldCountry, worldCity);
+
   return `
       Role: Story Architect
       Objective: ${objective}
       Level: ${level}
       Branch: ${isAdapted ? "ADAPTED" : "ORIGINAL"}
-      
+
       [Output Schema]
       ${schemaTip}
-      
+
       [Instructions V2.6 - Saga Scope & Naming Diversity]
       1. 반드시 유효하고 완성된 JSON 형식으로만 반환할 것. 서술적인 설명이나 인사말 등을 절대 포함하지 말 것.
       2. [Saga Scope]: 만약 입력된 주제가 연작물(Series)인 경우, 특정 1권에 매몰되지 말고 **시리즈 전체의 대서사를 조망하는 아웃라인**을 추출할 것.
-      3. [Naming Diversity Guide]: 인물 각색 시 배경에 관계없이 **AI가 흔히 생성하는 클리셰 이름을 절대 사용하지 마십시오.** (예: 금지어 - 흔한 성씨와 이름의 조합, 서브컬처에서 반복되는 전형적인 주인공명 등)
-         - 대신 장르에 부합하는 개성 있는 이름을 고안하십시오 (예: 성씨 20종 활용 - 범, 제갈, 남궁, 견, 선우 등 특이 성씨 포함 권장).
+      3. ${namingGuide}
       4. [L1 전구간 분석]: 시리즈 전체를 관통하는 핵심 고유 명사 및 설정(Glossary)을 15개 이상 추출할 것.
       5. [L1 아웃라인]: 전체 시리즈의 시작부터 최종 결말까지를 포함하여 약 800자 내외로 작성할 것 (synthesized_body_kr 또는 massive_saga_outline_kr).
       6. [L1 서사 설계]: 시리즈의 거대한 분기점(Timeline) 최소 5개, 복선(Foreshadowing) 최소 3개, 그리고 상위 5명의 인물 아크(Character Arcs)를 반드시 상세히 기술할 것. 빈 배열([])을 절대 반환하지 말 것.
@@ -465,4 +469,47 @@ function safeParseJSON(text: string): AgentResponse {
     }
     return { success: false, error: `JSON Critical Failure: ${e1.message}`, rawText: text };
   }
+}
+
+/**
+ * buildNamingGuide
+ * 배경 국가·도시 정보를 기반으로 문화적으로 적합한 이름 생성 지침을 반환합니다.
+ * '배경에 관계없이 한국 성씨' 하드코딩을 제거하고 국가별 동적 가이드로 대체합니다.
+ */
+function buildNamingGuide(worldCountry: string, worldCity: string): string {
+    const country = (worldCountry || '').toLowerCase();
+    const location = [worldCity, worldCountry].filter(Boolean).join(', ');
+    const locationHint = location ? ` (배경: ${location})` : '';
+
+    // 국가별 네이밍 컨벤션 매핑
+    const namingConventions: Record<string, string> = {
+        japan:      '일본식 이름 (성씨 예: 黒木·霧島·白銀·翠·緋山 등, 이름 예: 蒼·零·渉·夜叉丸 등) 을 사용하라. 한국식 성씨(김·이·박 등)는 절대 사용하지 마라.',
+        '일본':     '일본식 이름 (성씨 예: 黒木·霧島·白銀·翠·緋山 등, 이름 예: 蒼·零·渉·夜叉丸 등) 을 사용하라. 한국식 성씨(김·이·박 등)는 절대 사용하지 마라.',
+        china:      '중국식 이름 (성씨 예: 鄒·聶·靳·顧·謝 등) 을 사용하라.',
+        '중국':     '중국식 이름 (성씨 예: 鄒·聶·靳·顧·謝 등) 을 사용하라.',
+        korea:      '한국식 이름을 사용하되 AI 클리셰(민준·서연·지호 조합)는 피하고 개성 있는 성씨(범·제갈·남궁·견·선우 등)를 권장한다.',
+        '한국':     '한국식 이름을 사용하되 AI 클리셰(민준·서연·지호 조합)는 피하고 개성 있는 성씨(범·제갈·남궁·견·선우 등)를 권장한다.',
+        usa:        'Western names fitting the genre and cultural setting. Avoid stereotypical action-hero name patterns.',
+        uk:         'British-style names fitting the genre.',
+        europe:     'European names appropriate to the specific cultural setting.',
+        fantasy:    '세계관 고유의 독창적 이름을 창조하라. 실존 국가의 이름 체계를 그대로 사용하지 말고, 세계관의 언어 규칙에서 유추한 새로운 이름을 고안하라.',
+    };
+
+    // 국가 키 매칭
+    let convention = '';
+    for (const [key, value] of Object.entries(namingConventions)) {
+        if (country.includes(key)) {
+            convention = value;
+            break;
+        }
+    }
+
+    if (!convention) {
+        // 국가 정보 없을 때 일반 가이드
+        convention = '배경 세계관의 문화·언어적 맥락에 맞는 이름을 사용하라. 특정 국가 이름 체계를 근거 없이 적용하지 마라.';
+    }
+
+    return `[Naming Diversity Guide]${locationHint}: AI가 흔히 생성하는 클리셰 이름을 절대 사용하지 마십시오.
+         - **배경 국가 기반 이름 규칙**: ${convention}
+         - 동일 성씨가 주요 캐릭터 간에 중복되지 않도록 하라.`;
 }

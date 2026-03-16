@@ -31,13 +31,22 @@ export async function POST(req: NextRequest) {
         const { data: summaries } = await supabase.from('story_summary').select('level, synthesized_body_kr').eq('project_id', projectId);
         const { data: existingChars } = await supabase.from('characters').select('id, reinterpreted_name_kr, reinterpreted_name_en, reinterpreted_role_kr, reinterpreted_tier_kr').eq('project_id', projectId);
 
+        // 배경 국가 기반 이름 규칙 동적 생성
+        const worldCountry: string = projectConfig?.world_country_kr || projectConfig?.world_country_en || '';
+        const worldCity: string = projectConfig?.world_city_kr || projectConfig?.world_city_en || '';
+        const namingRule = buildCharacterNamingRule(worldCountry, worldCity);
+
         const projectDNA = projectConfig ?
             `[PROJECT NARRATIVE DNA]
             Genre: ${projectConfig.genre_en} (${projectConfig.genre_kr})
             Tone: ${projectConfig.story_tone_en} (${projectConfig.story_tone_kr})
-            World: ${projectConfig.world_city_en} (${projectConfig.world_city_kr})
+            Country: ${projectConfig.world_country_en} (${projectConfig.world_country_kr})
+            World/City: ${projectConfig.world_city_en} (${projectConfig.world_city_kr})
             Culture: ${projectConfig.cultural_setting_en} (${projectConfig.cultural_setting_kr})
-            Art Style: ${projectConfig.art_style_en} (${projectConfig.art_style_kr})` : "None";
+            Art Style: ${projectConfig.art_style_en} (${projectConfig.art_style_kr})
+
+            [NAMING RULE — MANDATORY]
+            ${namingRule}` : "None";
 
         const contextText = inputSceneText || summaries?.filter(s => s.level === 'L1').map(s => s.synthesized_body_kr).join('\n') || "";
 
@@ -68,6 +77,7 @@ export async function POST(req: NextRequest) {
             3. **Gender Accuracy**: Explicitly determine the character's gender (MALE/FEMALE/NON-BINARY) based on context and name.
             4. **Thematic Visuals**: Visual traits MUST reflect the [PROJECT NARRATIVE DNA].
             5. **Descriptions Only**: provide high-quality narrative descriptions.
+            6. **NAMING RULE (CRITICAL)**: ${namingRule} — 이 규칙을 어기는 이름(예: 배경이 일본인데 한국식 성씨 사용)은 절대 생성하지 마라.
 
             Return ONLY a JSON array.
             Format: {
@@ -225,4 +235,35 @@ export async function POST(req: NextRequest) {
         console.error(`>>> [Character Engine ERROR]`, err);
         return NextResponse.json({ error: err.message }, { status: 500 });
     }
+}
+
+/**
+ * buildCharacterNamingRule
+ * 배경 국가에 따라 캐릭터 이름 생성 규칙을 반환합니다.
+ * analyze-characters 프롬프트에 주입되어 국가와 맞지 않는 이름 생성을 방지합니다.
+ */
+function buildCharacterNamingRule(worldCountry: string, worldCity: string): string {
+    const c = (worldCountry || '').toLowerCase();
+    const location = [worldCity, worldCountry].filter(Boolean).join(', ');
+    const hint = location ? `배경(${location})` : '프로젝트 배경';
+
+    if (c.includes('japan') || c.includes('일본')) {
+        return `${hint}이 일본이므로 반드시 일본식 이름을 사용하라. 성씨 예: 霧島·黒木·白銀·緋山·蒼井·夜刀·朧·雪代 등. 이름 예: 蒼·零·渉·夜叉·朔·紫苑 등. 한국식 성씨(김·이·박·최·정 등)는 절대 사용 금지.`;
+    }
+    if (c.includes('china') || c.includes('중국')) {
+        return `${hint}이 중국이므로 반드시 중국식 이름을 사용하라. 성씨 예: 鄒·聶·靳·顧·謝·燕·蕭·凌 등. 한국식 성씨는 절대 사용 금지.`;
+    }
+    if (c.includes('korea') || c.includes('한국')) {
+        return `${hint}이 한국이므로 한국식 이름을 사용하되, AI가 자주 반복하는 클리셰 이름(강태준·김민준·이서연 등)은 절대 사용 금지. 개성 있는 성씨(범·제갈·남궁·견·선우·독고 등)를 권장.`;
+    }
+    if (c.includes('usa') || c.includes('미국') || c.includes('america')) {
+        return `${hint}이 미국이므로 영미식 이름을 사용하라. 한국·일본·중국식 성씨는 사용 금지 (해당 문화권 캐릭터로 명시된 경우 제외).`;
+    }
+    if (c.includes('europe') || c.includes('유럽') || c.includes('uk') || c.includes('영국') || c.includes('france') || c.includes('프랑스')) {
+        return `${hint}이 유럽이므로 해당 국가 문화에 맞는 유럽식 이름을 사용하라. 아시아계 성씨는 사용 금지 (해당 문화권 캐릭터로 명시된 경우 제외).`;
+    }
+    if (!worldCountry) {
+        return `배경 국가가 명시되지 않았습니다. 세계관의 문화적 맥락에 맞는 이름을 사용하고, 특정 국가 성씨를 임의로 적용하지 마라.`;
+    }
+    return `${hint}의 문화·언어 체계에 맞는 이름을 사용하라. 배경과 관련 없는 국가의 이름 체계를 임의로 사용하지 마라.`;
 }
