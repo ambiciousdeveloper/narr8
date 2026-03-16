@@ -1,13 +1,21 @@
 ==================================================
  대본: 쩌우하이 (전체 씬 구조화 버전)
- 포맷 버전: v1.0
+ 포맷 버전: v1.1
  화자 ID 목록:
-   JEOUHAI       — 쩌우하이 (주인공)
+   JEOUHAI        — 쩌우하이 (주인공)
    VOICE_PHONE_01 — 전화 속 부하 목소리
    VOICE_DOOR_01  — 문 밖의 목소리 (부하)
    SHADOW         — 그림자 (린웨이로 추정, 미확인)
    LINWEI         — 린웨이
    UNKNOWN_CALLER — 발신자 불명 협박 전화
+
+ [ElevenLabs 적용 기준 v1.1]
+ ✅ 적용: [SFX]          → ElevenLabs SFX v2 API (텍스트 프롬프트)
+ ✅ 적용: [CHAR | TONE:] → ElevenLabs Eleven v3 Audio Tags
+ 🔜 고도화 예정 (이번 버전 제외):
+    AUDIO_FX:phone_filter    — 전화 음성 필터 (추후 FFmpeg 후처리 도입 검토)
+    AUDIO_FX:door_muffled    — 문 너머 먹먹한 효과 (추후 FFmpeg lowpass 도입 검토)
+    AUDIO_FX:voice_distortion — 발신자 불명 음성 왜곡 (추후 도입 검토)
 ==================================================
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -43,13 +51,13 @@ FRAME_3: 복잡한 코드가 스크롤되는 모니터 화면
 [CHAR:JEOUHAI | TONE:짜증+냉담]
 왜. 지금 엄청 바쁜 거 안 보여?
 
-[CHAR:VOICE_PHONE_01 | TONE:긴장+보고 | AUDIO_FX:phone_filter]
+[CHAR:VOICE_PHONE_01 | TONE:긴장+보고]
 보스, 지금 상황이 좀... 젠싱 쪽에서 움직임이 포착됐습니다. 심상치 않습니다.
 
 [CHAR:JEOUHAI | TONE:충격+날카로움]
 뭐? 벌써? 내가 뭘 하는지 안다는 거야? 어떻게?
 
-[CHAR:VOICE_PHONE_01 | TONE:불확실+경고 | AUDIO_FX:phone_filter]
+[CHAR:VOICE_PHONE_01 | TONE:불확실+경고]
 아직 정확히는... 하지만 조심해야 합니다. 그쪽에서 감시망을 더 조이는 것 같습니다.
 
 [CHAR:JEOUHAI | TONE:차갑게 명령]
@@ -88,7 +96,7 @@ FRAME_5: 사진을 쓰다듬는 쩌우하이 얼굴 — 슬픔과 결의
 그는 책상 서랍을 열어 오래된 사진 한 장을 꺼낸다.
 빛바랜 사진 속에는 젊은 쩌우하이와 한 소녀가 환하게 웃고 있다.
 
-[CHAR:JEOUHAI | TONE:슬픔+결의 | 속삭이듯]
+[CHAR:JEOUHAI | TONE:슬픔+결의+속삭임]
 미안해. 내가 꼭... 반드시 되찾아올게. 네 자유를.
 
 [ACTION]
@@ -130,7 +138,7 @@ FRAME_4: 문을 두드리는 소리에 돌아보는 쩌우하이
 [CHAR:JEOUHAI | TONE:날카롭게 경고]
 누구야! 지금 방해하지 마!
 
-[CHAR:VOICE_DOOR_01 | TONE:조심스럽게+긴박 | AUDIO_FX:door_muffled]
+[CHAR:VOICE_DOOR_01 | TONE:조심스럽게+긴박]
 저예요, 보스. 잠깐만 들어가도 될까요? 중요한 정보가 있습니다. 젠싱 쪽 움직임이 심상치 않습니다.
 
 [CHAR:JEOUHAI | TONE:차갑게 허락+위협]
@@ -521,7 +529,7 @@ FRAME_3: 발신자 표시 없는 전화 화면 — 불안한 눈빛으로 쩌우
 [CHAR:JEOUHAI | TONE:경계+조심스럽게]
 누구세요?
 
-[CHAR:UNKNOWN_CALLER | TONE:위협+냉담 | AUDIO_FX:voice_distortion]
+[CHAR:UNKNOWN_CALLER | TONE:위협+냉담]
 쩌우하이 당신은 누구시오? 무슨 볼 일로 전화했소?
 
 [CHAR:JEOUHAI | TONE:분노+경고]
