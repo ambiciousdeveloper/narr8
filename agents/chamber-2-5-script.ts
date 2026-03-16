@@ -140,10 +140,11 @@ export class ScriptScribe {
         // Note: ScriptScribe uses `currentTemp` (dynamic per-chunk), not a static creativity value.
 
         // 1. Unified Configuration Fetching
-        const [volumeSop, sopGuidelines, sopPersona] = await Promise.all([
+        const [volumeSop, sopGuidelines, sopPersona, sopScriptWriter] = await Promise.all([
             AgentFactory.fetchSOP('VOLUME_CONTROL_POLICY'),
             AgentFactory.fetchSOP('SCRIBE_GUIDELINES_SCRIPT'),
-            AgentFactory.fetchSOP('SCRIBE_PERSONA_SCRIPT')
+            AgentFactory.fetchSOP('SCRIBE_PERSONA_SCRIPT'),
+            AgentFactory.fetchSOP('GENE_SCRIPT_WRITER')
         ]);
 
         const fetchConfigMultiplier = async (key: string, def: number) => {
@@ -276,6 +277,7 @@ export class ScriptScribe {
                     nextSceneNumber: contextState.lastSceneNumber + 1,
                     sopPersona,
                     sopGuidelines,
+                    sopScriptWriter,
                     dialogueRetry,
                     ...contextState
                 });
@@ -1011,7 +1013,11 @@ function buildUnifiedPrompt(p: any): string {
     const nextNum = p.nextSceneNumber || 1;
 
     const personaBlock = p.sopPersona ? `[PERSONA]\n${p.sopPersona}\n` : '';
-    const guidelinesBlock = p.sopGuidelines ? `[ADDITIONAL GUIDELINES]\n${p.sopGuidelines}\n` : '';
+    const scriptWriterBlock = p.sopScriptWriter ? `[SCRIPT WRITING RULES — MANDATORY]\n${p.sopScriptWriter}\n` : '';
+    const guidelinesBlock = [
+        p.sopGuidelines ? `[ADDITIONAL GUIDELINES]\n${p.sopGuidelines}` : '',
+        scriptWriterBlock
+    ].filter(Boolean).join('\n');
 
     // 씬당 평균 글자 수: system_config SCRIPT_SCENE_AVG_CHARS 에서 fetch한 값 사용
     const avgCharsPerScene = p.sceneAvgChars || 300;
