@@ -140,9 +140,9 @@ export async function POST(req: NextRequest) {
       Project Identity: ${project.source_identity_kr}
       Hierachy Level: ${level}
       Branch Type: ${currentBranch}
-      World Country: ${project.world_country_kr || ''} (${project.world_country_en || ''})
+      ${isAdapted ? `World Country: ${project.world_country_kr || ''} (${project.world_country_en || ''})
       World City: ${project.world_city_kr || ''} (${project.world_city_en || ''})
-      Cultural Setting: ${project.cultural_setting_kr || ''} (${project.cultural_setting_en || ''})
+      Cultural Setting: ${project.cultural_setting_kr || ''} (${project.cultural_setting_en || ''})` : ''}
       [SOURCE MATERIAL]
       ${sourceMaterial}
 
@@ -278,12 +278,14 @@ export async function POST(req: NextRequest) {
 
       agentResult = { success: true, data: { items: episodes } };
     } else {
-      agentResult = await StoryArchitect.analyze(level, contextForAgent, isAdapted, {
-        worldCountry: project.world_country_kr || project.world_country_en || '',
-        worldCountryEn: project.world_country_en || '',
-        worldCity: project.world_city_kr || project.world_city_en || '',
-        worldCityEn: project.world_city_en || '',
-      });
+      agentResult = await StoryArchitect.analyze(level, contextForAgent, isAdapted,
+        isAdapted ? {
+          worldCountry: project.world_country_kr || project.world_country_en || '',
+          worldCountryEn: project.world_country_en || '',
+          worldCity: project.world_city_kr || project.world_city_en || '',
+          worldCityEn: project.world_city_en || '',
+        } : undefined
+      );
     }
 
     if (!agentResult.success) {
