@@ -8,6 +8,16 @@ import {
     DEFAULT_SECTION_LIMIT_EN,
     DEFAULT_NOVEL_KO_RATIO,
 } from '../lib/constants';
+import {
+    buildCoTPrefix,
+    buildFewShotBlock,
+    buildConstraintBlock,
+    buildCTRLTokens,
+    DEFAULT_NOVEL_CONSTRAINTS,
+    judgeProseQuality,
+    DEFAULT_NOVEL_RUBRIC,
+    type CTRLParams,
+} from '../lib/narrative-intelligence';
 
 
 export class NovelScribe {
@@ -147,7 +157,38 @@ export class NovelScribe {
                     generationConfig: { temperature: creativity, maxOutputTokens: 12000 }
                 });
 
-                const chunkResponse = safeParseJSON(result.response.text());
+                let chunkResponse = safeParseJSON(result.response.text());
+
+                // ── Iterative Refinement: LLM-as-Judge 품질 게이트 ──────────────
+                // 첫 번째 생성 결과가 기준치 미달이면 한 번 재생성합니다.
+                if (chunkResponse.success) {
+                    const rawContent = chunkResponse.data?.content || chunkResponse.data?.prose || "";
+                    if (rawContent.length > 200) {
+                        const judgeResult = await judgeProseQuality(
+                            rawContent,
+                            DEFAULT_NOVEL_RUBRIC,
+                            process.env.GEMINI_API_KEY!,
+                            `Section ${i + 1}/${actualSections}`
+                        );
+                        console.log(`>>> [Iterative Refinement] Section ${i + 1} Score: ${judgeResult.totalScore.toFixed(1)} | ${judgeResult.summary}`);
+
+                        if (!judgeResult.approved && judgeResult.totalScore < 70) {
+                            console.warn(`>>> [Iterative Refinement] Score too low (${judgeResult.totalScore.toFixed(1)}), regenerating...`);
+                            const refinedPrompt = chunkPrompt + `\n\n[REFINEMENT FEEDBACK — 이전 생성물의 문제점]\n${judgeResult.summary}\n${judgeResult.breakdown.filter(b => b.score < 70).map(b => `• ${b.criterion}: ${b.comment}`).join('\n')}\n위 문제점을 수정하여 다시 작성하라.`;
+                            const retryResult = await model.generateContent({
+                                contents: [{ role: 'user', parts: [{ text: refinedPrompt }] }],
+                                generationConfig: { temperature: Math.min(creativity + 0.05, 0.95), maxOutputTokens: 12000 }
+                            });
+                            const retryResponse = safeParseJSON(retryResult.response.text());
+                            if (retryResponse.success) {
+                                chunkResponse = retryResponse;
+                                console.log(`>>> [Iterative Refinement] Section ${i + 1} regenerated.`);
+                            }
+                        }
+                    }
+                }
+                // ─────────────────────────────────────────────────────────────────
+
                 if (chunkResponse.success) {
                     const data = chunkResponse.data;
                     const content = data.content || data.prose || (language === 'KO' ? data.synthesized_kr : data.synthesized_en) || "";
@@ -287,10 +328,36 @@ function buildScribePrompt(
       - Do NOT use: "도시의 수호자", "여정은 아직 끝나지 않았다", "결코 포기하지 않을 것이다", "빛을 찾아 헤매는", "미래를 향해 나아가야만 했다".
     - **[TRANSITION RULE]**: Connect seamlessly with the [Previous Context State]. Stop immediately when the beat is fulfilled.` : "";
 
+    // ── AI 기법 주입 블록 ────────────────────────────────────────────────────
+    // Chain-of-Thought: 씬 작성 전 단계적 추론 유도
+    const cotPrefix = buildCoTPrefix('NOVEL_SCENE');
+
+    // Few-Shot: 저품질 → 고품질 예시 쌍으로 원하는 수준 학습
+    const fewShotBlock = buildFewShotBlock('PROSE_EXPANSION');
+
+    // Constraint-Based: 명시적 DO/DON'T 제약 목록
+    const constraintBlock = buildConstraintBlock(DEFAULT_NOVEL_CONSTRAINTS);
+
+    // Controllable Generation (CTRL): 장르·톤·페이싱 제어 토큰
+    const ctrlParams: CTRLParams = {
+        genre:   activeBlueprint?.style_guide?.tone_en   || 'Literary Fiction',
+        tone:    activeBlueprint?.style_guide?.tone_kr   || '감성적',
+        pov:     '3인칭 제한적',
+        pacing:  sectionIndex && totalSections && sectionIndex > Math.floor(totalSections * 0.7) ? 'FAST' : 'MEDIUM',
+    };
+    const ctrlTokens = buildCTRLTokens(ctrlParams);
+    // ────────────────────────────────────────────────────────────────────────
+
     return `
         [IDENTITY & MISSION]
         ${personaSop || "Role: Master Storyteller."}
-        
+
+        ${ctrlTokens}
+
+        ${cotPrefix}
+
+        ${fewShotBlock}
+
         [CORE OBJECTIVE]
         Generate high-quality ${format} content. Language: ${language}.
         Target Length: ${targetLength} characters.
@@ -299,12 +366,14 @@ function buildScribePrompt(
         [INPUT DATA]
         - Plot/Context: ${originalPlot}
         ${mode !== 'CREATE' ? `- Reference Text: ${refText}` : ''}
-        
+
         [GUIDELINES (SOP)]
         ${customSop || "Adhere to high literary standards. Avoid repetitive metaphors and clichés."}
         - **Prose Diversity (CRITICAL)**: Do NOT start consecutive paragraphs with the same word or naming subject.
         - **[ANTI-NAME-START PENALTY]**: ABSOLUTELY DO NOT start paragraphs with the protagonist's name or pronoun (e.g., "주인공은...", "그는..."). This is a glaring AI mistake. Use Deep POV: start paragraphs with environmental changes, sensory details, an opposing force, an object, or a dialogue. (e.g., Instead of "주인공은 문을 열었다", write "녹슨 철문이 비명을 지르며 젖은 어둠을 토해냈다.")
         - **Sensory Saturation**: Every paragraph should evoke at least one of the five senses.
+
+        ${constraintBlock}
 
         [CONSTRAINTS]
         - **Naming**: Use accepted DB names only. DO NOT use common clichés.
