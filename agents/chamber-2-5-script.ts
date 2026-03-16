@@ -252,12 +252,16 @@ export class ScriptScribe {
                     canonicalNames,
                     sceneSkeleton,
                     confirmedSlots,  // V171: confirmed scene slots from source novel (empty = fallback to V169)
-                    // V140: Stabilized Continuity Bridge — only last scene to avoid "story already done" hallucination.
+                    // V140: Stabilized Continuity Bridge — last 2 scenes for better narrative
+                    // continuity at chunk boundaries (e.g. S#5→S#6), while keeping context
+                    // short enough to avoid "story already done" hallucination.
                     chronicle: i === 0 ? chronicle : (() => {
-                        // Extract only the last scene from fullScript as anchor, not the entire history
                         const scenes = fullScript.split(/(?=S#\s*\d+\.)/);
-                        const lastScene = scenes[scenes.length - 1]?.trim() || fullScript.slice(-800);
-                        return `[CONTINUATION ANCHOR — last scene written:]\n${lastScene}\n\n[TASK]: Write NEW scenes continuing from S# ${contextState.lastSceneNumber + 1}. Do NOT repeat any of the above.`;
+                        // V140 fix: include last 2 scenes so mid-action narrative threads
+                        // carry over smoothly between chunks (chunk boundary continuity S#5~6).
+                        const anchorScenes = scenes.slice(-2).map(s => s.trim()).filter(Boolean);
+                        const anchor = anchorScenes.join('\n\n');
+                        return `[CONTINUATION ANCHOR — last ${anchorScenes.length} scene(s) written:]\n${anchor}\n\n[TASK]: Write NEW scenes continuing from S# ${contextState.lastSceneNumber + 1}. The story must flow naturally from the final moment above. Do NOT repeat any scene above.`;
                     })(),
                     language,
                     targetChars: sectionLengthTarget,
@@ -1485,9 +1489,16 @@ async function injectDialoguePass(script: string, charContext: string, model: an
             const standaloneRe = new RegExp(`^(${canonicalNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`, 'm');
             const m = block.match(standaloneRe);
             charName = m ? m[1] : null;
-            // Fallback: canonical name that appears anywhere in the block (action subject)
+            // Fallback: canonical name that appears as a standalone header line.
+            // V142 fix: block.includes(n) was matching names that appear only in action lines
+            // (e.g. "흑마도사가 사라진다.") and wrongly assigning them as speakers.
+            // Now restricted to names on their own line (dialogue header format).
             if (!charName) {
-                charName = canonicalNames.find(n => block.includes(n)) ?? null;
+                const headerRe = new RegExp(
+                    `(?:^|\\n)(${canonicalNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?:\\n|$)`
+                );
+                const hm = block.match(headerRe);
+                charName = hm ? hm[1] : null;
             }
         } else {
             // Legacy: match action-subject pattern — but ONLY accept names that are ≥3 chars
@@ -1549,8 +1560,15 @@ ${scenesWithChars.map((s, i) => `Scene ${i + 1} — ${s.charName} speaks:\n${s.b
             }
 
             const lines = sceneInfo.block.split('\n');
-            // Insert after the second non-empty line (after scene heading + first action)
-            const insertAt = Math.min(3, lines.length);
+            // V142 fix: instead of always inserting at line 3 (start of scene),
+            // find the midpoint of non-empty, non-slug action lines so dialogue lands
+            // in a narratively appropriate position (e.g. after ritual setup, not before it).
+            const nonEmptyIndices = lines
+                .map((l, idx) => ({ l: l.trim(), idx }))
+                .filter(({ l }) => l && !/^S#\s*\d+/.test(l));
+            const insertAt = nonEmptyIndices.length >= 3
+                ? nonEmptyIndices[Math.floor(nonEmptyIndices.length / 2)].idx + 1
+                : Math.min(3, lines.length);
             lines.splice(insertAt, 0, `${sceneInfo.charName}\n${dialogueLine}`);
             updatedBlocks[sceneInfo.idx] = lines.join('\n');
         });
@@ -1775,22 +1793,37 @@ function removeDuplicateSceneTransitions(script: string): string {
         const prevBlock = result[result.length - 1];
         const currBlock = blocks[i];
 
-        // Collect last meaningful action lines of previous block (non-slug, non-empty, substantial)
+        // Collect last meaningful action lines of previous block (non-slug, non-empty).
+        // V157 fix: lower threshold from >10 to >2 so short character-name header lines
+        // (e.g. "도해리", 3 chars) are included in prevTail and detected as duplicates.
         const prevLines = prevBlock.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('S#'));
-        const prevTail = new Set(prevLines.slice(-5).filter(l => l.length > 10));
+        const prevTail = new Set(prevLines.slice(-8).filter(l => l.length > 2));
 
         // Find slug line index in current block
         const currBlockLines = currBlock.split('\n');
         const slugIdx = currBlockLines.findIndex(l => /^S#\s*\d+/.test(l.trim()));
         const afterSlug = currBlockLines.slice(slugIdx + 1);
 
-        // Detect duplicate lines at start of current block's content
+        // V157 fix: detect duplicates including 2-line dialogue pairs (name + dialogue).
+        // Previously only checked line-by-line with length > 10, missing short name headers.
+        // Now: a line is a duplicate if it's in prevTail (any length > 2), OR if it forms
+        // a name+dialogue pair where both lines appear consecutively in prevTail.
         let dupCount = 0;
-        for (const line of afterSlug.slice(0, 5)) {
-            const trimmed = line.trim();
-            if (trimmed.length > 10 && prevTail.has(trimmed)) {
+        const afterSlugTrimmed = afterSlug.map(l => l.trim());
+        for (let di = 0; di < Math.min(afterSlugTrimmed.length, 7); di++) {
+            const trimmed = afterSlugTrimmed[di];
+            if (!trimmed) continue; // skip blank lines in scan
+            if (prevTail.has(trimmed)) {
                 dupCount++;
-            } else if (trimmed) {
+                // If this is a short name line, also consume the following dialogue line if it matches
+                if (trimmed.length <= 10) {
+                    const nextTrimmed = afterSlugTrimmed[di + 1] ?? '';
+                    if (nextTrimmed && prevTail.has(nextTrimmed)) {
+                        dupCount++;
+                        di++; // skip the matched dialogue line
+                    }
+                }
+            } else {
                 break; // stop at first non-duplicate non-empty line
             }
         }
@@ -1801,7 +1834,7 @@ function removeDuplicateSceneTransitions(script: string): string {
             const cleanedAfterSlug = afterSlug.filter(line => {
                 if (removed >= dupCount) return true;
                 if (!line.trim()) return true; // keep blank lines
-                if (line.trim().length > 10 && prevTail.has(line.trim())) {
+                if (line.trim().length > 2 && prevTail.has(line.trim())) {
                     removed++;
                     return false;
                 }
