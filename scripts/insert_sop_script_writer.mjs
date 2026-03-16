@@ -73,33 +73,37 @@ S# 1. INT. 쩌우하이의 작업실 - 밤
 누구야, 이 밤에.`;
 
 async function insertScriptWriterSOP() {
-    console.log('>>> Deactivating existing GENE_SCRIPT_WRITER SOP entries...');
-    await supabase
+    console.log('>>> Checking existing GENE_SCRIPT_WRITER SOP...');
+    const { data: existing } = await supabase
         .from('agent_sop_registry')
-        .update({ is_active: false })
-        .eq('sop_type', 'GENE_SCRIPT_WRITER');
+        .select('id')
+        .eq('sop_type', 'GENE_SCRIPT_WRITER')
+        .maybeSingle();
 
-    console.log('>>> Inserting GENE_SCRIPT_WRITER SOP v2.0...');
-    const { data, error } = await supabase
-        .from('agent_sop_registry')
-        .insert([
-            {
-                sop_type: 'GENE_SCRIPT_WRITER',
-                version: 'v2.0',
-                instruction: instruction,
-                is_active: true,
-            }
-        ])
-        .select();
+    let data, error;
+
+    if (existing) {
+        console.log(`>>> Updating existing record (ID: ${existing.id}) to v2.0...`);
+        ({ data, error } = await supabase
+            .from('agent_sop_registry')
+            .update({ version: 'v2.0', instruction: instruction, is_active: true })
+            .eq('id', existing.id)
+            .select());
+    } else {
+        console.log('>>> Inserting new GENE_SCRIPT_WRITER SOP v2.0...');
+        ({ data, error } = await supabase
+            .from('agent_sop_registry')
+            .insert([{ sop_type: 'GENE_SCRIPT_WRITER', version: 'v2.0', instruction: instruction, is_active: true }])
+            .select());
+    }
 
     if (error) {
-        console.error('❌ INSERT 실패:', error.message);
+        console.error('❌ 실패:', error.message);
         return;
     }
 
     console.log('✅ GENE_SCRIPT_WRITER SOP v2.0 등록 완료');
     console.log('   ID:', data[0].id);
-    console.log('   sop_type:', data[0].sop_type);
     console.log('   version:', data[0].version);
     console.log('   is_active:', data[0].is_active);
 }
